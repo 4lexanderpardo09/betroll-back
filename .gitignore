@@ -1,0 +1,43 @@
+# Dependencias
+node_modules/
+dist/
+build/
+
+# Archivos de entorno (MUY IMPORTANTE)
+.env
+.env.*
+!.env.example
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# TypeScript
+*.tsbuildinfo
+
+# Vite
+.vite/
+
+# Coverage
+coverage/
+
+# Archivos temporales
+tmp/
+temp/
+
+# OS
+*.pid
+*.seed
+*.pid.lock
