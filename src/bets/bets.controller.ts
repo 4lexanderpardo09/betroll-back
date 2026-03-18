@@ -18,7 +18,7 @@ import { ResolveBetDto } from './dto/resolve-bet.dto';
 
 interface AuthRequest {
   user: {
-    id: string;
+    userId: string;
     email: string;
   };
 }
@@ -40,7 +40,7 @@ export class BetsController {
     @Query('dateTo') dateTo?: string,
   ) {
     return this.betsService.findAll(
-      req.user.id,
+      req.user.userId,
       parseInt(page, 10),
       parseInt(limit, 10),
       { sport, status, category, dateFrom, dateTo },
@@ -49,12 +49,12 @@ export class BetsController {
 
   @Get('pending')
   async findPending(@Request() req: AuthRequest) {
-    return this.betsService.findPending(req.user.id);
+    return this.betsService.findPending(req.user.userId);
   }
 
   @Get('stats')
   async getStats(@Request() req: AuthRequest) {
-    return this.betsService.getStats(req.user.id);
+    return this.betsService.getStats(req.user.userId);
   }
 
   @Get(':id')
@@ -62,12 +62,12 @@ export class BetsController {
     @Request() req: AuthRequest,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.betsService.findOne(id, req.user.id);
+    return this.betsService.findOne(id, req.user.userId);
   }
 
   @Post()
   async create(@Request() req: AuthRequest, @Body() createBetDto: CreateBetDto) {
-    const bet = await this.betsService.createBet(req.user.id, createBetDto);
+    const bet = await this.betsService.createBet(req.user.userId, createBetDto);
     return { data: bet, message: 'Apuesta creada exitosamente' };
   }
 
@@ -77,7 +77,7 @@ export class BetsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() resolveBetDto: ResolveBetDto,
   ) {
-    const bet = await this.betsService.resolveBet(id, req.user.id, resolveBetDto);
+    const bet = await this.betsService.resolveBet(id, req.user.userId, resolveBetDto);
     return { data: bet, message: 'Apuesta resuelta exitosamente' };
   }
 
@@ -86,7 +86,7 @@ export class BetsController {
     @Request() req: AuthRequest,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    await this.betsService.remove(id, req.user.id);
+    await this.betsService.remove(id, req.user.userId);
     return { message: 'Apuesta eliminada exitosamente' };
   }
 }

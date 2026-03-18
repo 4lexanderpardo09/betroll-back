@@ -16,7 +16,7 @@ import { UpdateBankrollDto, DepositDto, WithdrawDto } from './dto/update-bankrol
 
 interface AuthRequest {
   user: {
-    id: string;
+    userId: string;
     email: string;
   };
 }
@@ -28,26 +28,26 @@ export class BankrollController {
 
   @Get()
   async getBankroll(@Request() req: AuthRequest) {
-    const bankroll = await this.bankrollService.getBankroll(req.user.id);
+    const bankroll = await this.bankrollService.getBankroll(req.user.userId);
     return { data: bankroll };
   }
 
   @Post()
   async createBankroll(@Request() req: AuthRequest, @Body() dto: CreateBankrollDto) {
-    const bankroll = await this.bankrollService.createBankroll(req.user.id, dto);
+    const bankroll = await this.bankrollService.createBankroll(req.user.userId, dto);
     return { data: bankroll, message: 'Bankroll creado exitosamente' };
   }
 
   @Patch()
   async updateBankroll(@Request() req: AuthRequest, @Body() dto: UpdateBankrollDto) {
-    const bankroll = await this.bankrollService.updateBankroll(req.user.id, dto);
+    const bankroll = await this.bankrollService.updateBankroll(req.user.userId, dto);
     return { data: bankroll, message: 'Bankroll actualizado exitosamente' };
   }
 
   @Patch('deposit')
   async deposit(@Request() req: AuthRequest, @Body() dto: DepositDto) {
     const bankroll = await this.bankrollService.deposit(
-      req.user.id,
+      req.user.userId,
       dto.amount,
       dto.description,
     );
@@ -57,7 +57,7 @@ export class BankrollController {
   @Patch('withdraw')
   async withdraw(@Request() req: AuthRequest, @Body() dto: WithdrawDto) {
     const bankroll = await this.bankrollService.withdraw(
-      req.user.id,
+      req.user.userId,
       dto.amount,
       dto.description,
     );
@@ -73,7 +73,7 @@ export class BankrollController {
     const pageNum = page ? parseInt(page, 10) : 1;
     const limitNum = limit ? parseInt(limit, 10) : 20;
     const result = await this.bankrollService.getMovements(
-      req.user.id,
+      req.user.userId,
       pageNum,
       limitNum,
     );

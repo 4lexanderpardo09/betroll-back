@@ -10,8 +10,9 @@ async function bootstrap() {
 
   app.use(cookieParser());
   
+  const frontendUrl = configService.get('FRONTEND_URL');
   app.enableCors({
-    origin: configService.get('FRONTEND_URL', 'http://localhost:5173'),
+    origin: frontendUrl || 'http://localhost:5173',
     credentials: true,
   });
 
