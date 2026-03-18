@@ -31,7 +31,10 @@ import { Parlay } from './parlays/entities/parlay.entity';
         password: configService.get('DB_PASSWORD', '123456'),
         database: configService.get('DB_NAME', 'betroll'),
         entities: [User, Bankroll, BankrollMovement, Bet, DailySnapshot, Parlay],
-        synchronize: true,
+        synchronize: configService.get('NODE_ENV') !== 'production',
+        ssl: configService.get('NODE_ENV') === 'production' 
+          ? { rejectUnauthorized: false } 
+          : false,
       }),
     }),
     AuthModule,
