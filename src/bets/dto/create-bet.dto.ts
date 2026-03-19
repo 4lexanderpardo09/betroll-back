@@ -37,7 +37,7 @@ export class CreateBetDto {
   odds: number;
 
   @IsInt()
-  @Min(1000)
+  @Min(500)
   amount: number;
 
   @IsOptional()
