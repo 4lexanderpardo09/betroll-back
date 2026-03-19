@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Bet, BetCategory, BetStatus } from './entities/bet.entity';
-import { CreateBetDto } from './dto/create-bet.dto';
+import { CreateBetDto, UpdateBetDto } from './dto/create-bet.dto';
 import { ResolveBetDto } from './dto/resolve-bet.dto';
 import { Bankroll } from '../bankroll/entities/bankroll.entity';
 import { BankrollMovement, BankrollMovementType } from '../bankroll/entities/bankroll-movement.entity';
@@ -524,6 +524,50 @@ export class BetsService {
     } else {
       await this.betRepository.delete(betId);
     }
+  }
+
+  /**
+   * Update a pending bet
+   */
+  async updateBet(betId: string, userId: string, dto: UpdateBetDto): Promise<Bet> {
+    const bet = await this.betRepository.findOne({
+      where: { id: betId, userId },
+    });
+
+    if (!bet) {
+      throw new NotFoundException('Apuesta no encontrada');
+    }
+
+    if (bet.status !== BetStatus.PENDING) {
+      throw new BadRequestException('Solo puedes editar apuestas pendientes');
+    }
+
+    const updateData: Partial<Bet> = {};
+    
+    if (dto.tournament !== undefined) updateData.tournament = dto.tournament;
+    if (dto.homeTeam !== undefined) updateData.homeTeam = dto.homeTeam;
+    if (dto.awayTeam !== undefined) updateData.awayTeam = dto.awayTeam;
+    if (dto.eventDate !== undefined) updateData.eventDate = new Date(dto.eventDate);
+    if (dto.betType !== undefined) updateData.betType = dto.betType;
+    if (dto.selection !== undefined) updateData.selection = dto.selection;
+    if (dto.odds !== undefined) updateData.odds = dto.odds;
+    if (dto.amount !== undefined) updateData.amount = dto.amount;
+    if (dto.reasoning !== undefined) updateData.reasoning = dto.reasoning;
+
+    // Recalculate potential win if odds or amount changed
+    if (dto.odds !== undefined || dto.amount !== undefined) {
+      const odds = dto.odds ?? bet.odds;
+      const amount = dto.amount ?? bet.amount;
+      updateData.potentialWin = Math.round(amount * odds - amount);
+    }
+
+    await this.betRepository.update(betId, updateData);
+
+    const updatedBet = await this.betRepository.findOne({ where: { id: betId } });
+    if (!updatedBet) {
+      throw new NotFoundException('Apuesta no encontrada después de actualizar');
+    }
+    return updatedBet;
   }
 
   /**

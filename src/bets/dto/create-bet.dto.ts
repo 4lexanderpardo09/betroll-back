@@ -64,3 +64,43 @@ export class ResolveBetDto {
   @IsString()
   postNotes?: string;
 }
+
+export class UpdateBetDto {
+  @IsOptional()
+  @IsString()
+  tournament?: string;
+
+  @IsOptional()
+  @IsString()
+  homeTeam?: string;
+
+  @IsOptional()
+  @IsString()
+  awayTeam?: string;
+
+  @IsOptional()
+  @IsDateString()
+  eventDate?: string;
+
+  @IsOptional()
+  @IsEnum(BetType)
+  betType?: BetType;
+
+  @IsOptional()
+  @IsString()
+  selection?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1.01)
+  odds?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(500)
+  amount?: number;
+
+  @IsOptional()
+  @IsString()
+  reasoning?: string;
+}

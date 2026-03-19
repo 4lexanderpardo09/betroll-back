@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { BetsService } from './bets.service';
-import { CreateBetDto } from './dto/create-bet.dto';
+import { CreateBetDto, UpdateBetDto } from './dto/create-bet.dto';
 import { ResolveBetDto } from './dto/resolve-bet.dto';
 
 interface AuthRequest {
@@ -79,6 +79,16 @@ export class BetsController {
   ) {
     const bet = await this.betsService.resolveBet(id, req.user.userId, resolveBetDto);
     return { data: bet, message: 'Apuesta resuelta exitosamente' };
+  }
+
+  @Patch(':id')
+  async update(
+    @Request() req: AuthRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() updateBetDto: UpdateBetDto,
+  ) {
+    const bet = await this.betsService.updateBet(id, req.user.userId, updateBetDto);
+    return { data: bet, message: 'Apuesta actualizada exitosamente' };
   }
 
   @Delete(':id')
