@@ -138,6 +138,15 @@ export class BetsService {
     const category = this.calculateCategory(dto.odds);
     const potentialWin = this.calculatePotentialWin(dto.amount, dto.odds);
 
+    // 5. Calculate confidence based on percentage
+    let confidence = dto.confidence ?? 2;
+    if (dto.percentage !== undefined) {
+      if (dto.percentage >= 5) confidence = 5;
+      else if (dto.percentage >= 3) confidence = 4;
+      else if (dto.percentage >= 1.5) confidence = 3;
+      else confidence = 2;
+    }
+
     // 5. Execute transaction
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -157,7 +166,7 @@ export class BetsService {
         odds: dto.odds,
         amount: dto.amount,
         category,
-        confidence: dto.confidence ?? 2,
+        confidence,
         reasoning: dto.reasoning ?? null,
         status: BetStatus.PENDING,
         potentialWin,

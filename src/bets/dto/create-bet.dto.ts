@@ -47,6 +47,10 @@ export class CreateBetDto {
   confidence?: number;
 
   @IsOptional()
+  @IsNumber()
+  percentage?: number;
+
+  @IsOptional()
   @IsString()
   reasoning?: string;
 }
