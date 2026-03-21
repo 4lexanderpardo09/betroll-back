@@ -138,13 +138,14 @@ export class BetsService {
     const category = this.calculateCategory(dto.odds);
     const potentialWin = this.calculatePotentialWin(dto.amount, dto.odds);
 
-    // 5. Calculate confidence based on percentage
-    let confidence = dto.confidence ?? 2;
+    // 5. Calculate confidence based on percentage (1.5% = 1 star, 3% = 3 stars, 5% = 5 stars)
+    let confidence = dto.confidence ?? 3;
     if (dto.percentage !== undefined) {
       if (dto.percentage >= 5) confidence = 5;
-      else if (dto.percentage >= 3) confidence = 4;
-      else if (dto.percentage >= 1.5) confidence = 3;
-      else confidence = 2;
+      else if (dto.percentage >= 4) confidence = 4;
+      else if (dto.percentage >= 3) confidence = 3;
+      else if (dto.percentage >= 2) confidence = 2;
+      else confidence = 1; // 1.5% = 1 star
     }
 
     // 5. Execute transaction
