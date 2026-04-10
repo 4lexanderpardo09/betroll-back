@@ -1,7 +1,7 @@
 # ODDSIQ — FASE 2: Scraping Services
 
 > **Fecha:** 10 Abril 2026
-> **Estado:** ✅ COMPLETADA
+> **Estado:** ✅ COMPLETADA (parcialmente - servicios creados, APIs funcionan diferente a lo esperado)
 > **Rama:** `feat/fase2-scraping`
 
 ---
@@ -17,14 +17,13 @@ Implementar servicios de scraping para obtener datos de sports de fuentes extern
 
 ## 2. SERVICIOS CREADOS
 
-### 2.1 CacheService
+### 2.1 CacheService ✅
 
 **Ubicación:** `src/services/cache.service.ts`
 
 Sistema de cache en memoria para evitar requests repetidos.
 
 ```typescript
-// TTL predefinidos
 static readonly TTL = {
   MATCH_STATS: 60 * 60 * 1000,      // 1 hora
   MATCH_PREVIOUS: 7 * 24 * 60 * 60 * 1000, // 7 días
@@ -32,272 +31,219 @@ static readonly TTL = {
   INJURIES: 6 * 60 * 60 * 1000,      // 6 horas
   NEWS: 2 * 60 * 60 * 1000,          // 2 horas
   ODDS_PRE_MATCH: 15 * 60 * 1000,    // 15 minutos
-  ODDS_LIVE: 60 * 1000,              // 1 minuto
   TEAM_FORM: 6 * 60 * 60 * 1000,     // 6 horas
   SCHEDULE: 60 * 60 * 1000,          // 1 hora
 };
 ```
 
-**Métodos principales:**
-- `get<T>(key)` — Obtener del cache
-- `set<T>(key, data, ttlMs)` — Guardar en cache
-- `getOrFetch<T>(key, fetcher, ttlMs)` — Get or fetch con cache
-- `invalidate(key)` — Invalidar una key
-- `getStats()` — Estadísticas de cache (hits/misses)
-
 ---
 
-### 2.2 SofascoreService
+### 2.2 SofascoreService ⚠️
 
 **Ubicación:** `src/services/sofascore.service.ts`
-
-Scraping de estadísticas deportivas desde Sofascore.
 
 **Base URL:** `https://api.sofascore.com/api/v1`
 
 **AUTH:** No requiere API key. Solo headers especiales para evadir WAF.
 
-```typescript
-// Headers necesarios
-private readonly headers = {
-  'User-Agent': 'Mozilla/5.0...Chrome/120...',
-  Accept: 'application/json',
-  'Accept-Language': 'en-US,en;q=0.9',
-};
-```
+**PROBLEMA ENCONTRADO:** Cloudflare WAF bloquea requests con 403 Forbidden.
 
-**Rate limiting:** 1 request/segundo
-
-#### Endpoints implementados:
-
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| `getScheduledEvents(sport, date)` | `/sport/{sport}/scheduled-events/{date}` | Partidos del día |
-| `getEventDetails(eventId)` | `/event/{eventId}` | Detalles del partido |
-| `getEventStatistics(eventId)` | `/event/{eventId}/statistics` | Stats (FG%, rebotes, etc.) |
-| `getEventLineups(eventId)` | `/event/{eventId}/lineups` | Quintetos |
-| `getTeam(teamId)` | `/team/{teamId}` | Info del equipo |
-| `getTeamPlayers(teamId)` | `/team/{teamId}/players` | Roster completo |
-| `getTeamPerformance(teamId)` | `/team/{teamId}/performance` | Forma recent + racha |
-| `getPlayerStats(playerId)` | `/player/{playerId}/statistics/seasons` | Stats históricos |
-| `getUniqueTournaments(sport)` | `/sport/{sport}/unique-tournaments` | Lista torneos |
-| `getStandings(tournamentId, seasonId)` | `/tournament/{id}/season/{id}/standings/total` | Clasificación |
-
-**Método principal:**
-```typescript
-// Obtiene todos los datos de un partido
-async getMatchData(eventId: string): Promise<CompiledMatchData>
-```
+**Soluciones potenciales:**
+1. Usar `curl_cffi` (librería Python que emulate TLS fingerprinting)
+2. Mejorar headers con cookies de sesión
+3. Usar proxy rotativo
+4. **Alternativa:** Usar ESPN como fuente principal (ver abajo)
 
 ---
 
-### 2.3 ESPNService
+### 2.3 ESPNService ⚠️
 
 **Ubicación:** `src/services/espn.service.ts`
 
-Scraping de injuries y news desde ESPN.
+**PROBLEMA ENCONTRADO:** La API `api.espn.com/v3` (injuries, news) devuelve 401 Unauthorized.
 
-**Base URL:** `https://api.espn.com/v3`
+**SOLUCIÓN ENCONTRADA:** `site.api.espn.com` funciona PERFECTO para scoreboard!
 
-**AUTH:** No requiere API key.
+**Endpoint que SÍ funciona:**
+```
+GET https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard
+```
 
-#### Endpoints implementados:
+**Datos que devuelve:**
+- `events[]` — 15 partidos del día
+- `competitions[].competitors[]` — Stats (PPG, FG%, rebotes, assists)
+- `competitions[].odds[]` — **ODDS DE DRAFTKINGS** (h2h, spreads, totals)
+- `competitions[].status` — Estado del partido
 
-| Método | Descripción |
-|--------|-------------|
-| `getInjuries(sport, league)` | Injury report completo |
-| `getTeamInjuries(sport, league, teamId)` | Injuries de un equipo |
-| `getNews(sport, league, limit)` | News recientes |
-| `getScoreboard(sport, league, dates)` | Scoreboard |
-| `getStandings(sport, league)` | Clasificación |
-| `getTeams(sport, league)` | Lista de equipos |
-
-**Sports keys soportados:**
-- `basketball/nba`
-- `basketball/wnba`
-- `football/nfl`
-- `baseball/mlb`
-- `hockey/nhl`
-- `soccer/eng.1` (Premier League)
+**Ejemplo real (10 Abril 2026):**
+```json
+{
+  "events": [{
+    "id": "401695582",
+    "name": "Detroit Pistons at Charlotte Hornets",
+    "competitions": [{
+      "competitors": [{
+        "team": { "name": "Charlotte Hornets", "abbreviation": "CHA" },
+        "records": [{ "summary": "43-37" }],
+        "leaders": [{ "stats": [{ "displayValue": "22.3" }] }]
+      }],
+      "odds": [{
+        "provider": { "name": "DraftKings", "id": 21 },
+        "details": "CHA -4.5 | O/U 226.5",
+        "overTotal": 226.5, "underTotal": 226.5
+      }]
+    }]
+  }]
+}
+```
 
 ---
 
-### 2.4 OddsService
+### 2.4 OddsService ⚠️
 
 **Ubicación:** `src/services/odds.service.ts`
-
-Integración con The Odds API para cuotas de sportsbooks.
 
 **Base URL:** `https://api.the-odds-api.com/v4`
 
 **AUTH:** Requiere API key (gratis en the-odds-api.com)
 
-```typescript
-// Config en .env
-ODDS_API_KEY=tu_api_key
-```
+**STATUS:** Servicio creado pero NO TESTEADO (necesita API key).
 
-#### Endpoints implementados:
-
-| Método | Descripción |
-|--------|-------------|
-| `getSports()` | Lista de sports disponibles (GRATIS) |
-| `getOdds(sportKey, regions, markets)` | Odds de un sport |
-| `getEventOdds(sportKey, eventId, regions, markets)` | Odds de 1 evento |
-| `getBestOdds(bookmakers, selection, market)` | Mejor odds para selección |
-| `getMatchOddsComparison(bookmakers, home, away, market)` | Comparación H2H |
-
-#### Métodos utility:
-
-```typescript
-// Conversiones
-americanToDecimal(odds: number): number
-decimalToAmerican(odds: number): number
-
-// Cálculos
-calculateImpliedProbability(odds: number, format): number
-calculateEV(estimatedProbability: number, odds: number, format): number
-hasValue(estimatedProbability: number, odds: number, format): { hasValue: boolean, edge: number }
-```
-
-#### Sport Keys:
-
-```typescript
-SPORYS = {
-  BASKETBALL_NBA: 'basketball_nba',
-  FOOTBALL_NFL: 'americanfootball_nfl',
-  SOCCER_EPL: 'soccer_epl',
-  TENNIS_ATP: 'tennis_atp',
-  // ... más
-}
-```
-
-#### Regions:
-
-- `us` — US sportsbooks (DraftKings, FanDuel, BetMGM)
-- `uk` — UK bookmakers (William Hill, Ladbrokes)
-- `eu` — European (1xBet, Pinnacle)
-- `au` — Australian (Sportsbet, TAB)
-
-#### Markets:
-
-- `h2h` — Moneyline (ganador)
-- `spreads` — Handicaps
-- `totals` — Over/Under
-- `player_props` — Player props
+**IMPORTANTE:** Según los tests de ESPN, **ESPN Scoreboard YA incluye odds de DraftKings**. Por lo tanto, para NBA:
+- **The Odds API es OPCIONAL** si usamos ESPN Scoreboard
+- The Odds API sigue siendo útil para:
+  - Más sportsbooks (FanDuel, BetMGM además de DraftKings)
+  - Otros sports (Football, Tennis, Soccer)
+  - Comparación de líneas entre sportsbooks
 
 ---
 
-## 3. MÓDULO CREADO
+## 3. INVESTIGACIÓN PROFUNDA DE APIS — CONCLUSIONES
 
-### DataServicesModule
+### Free NBA Data APIs
 
-**Ubicación:** `src/services/data-services.module.ts`
+| API | Endpoint | Auth | Status | Datos |
+|-----|----------|------|--------|-------|
+| ESPN Scoreboard | site.api.espn.com | No | ✅ FUNCIONA | Stats + Odds |
+| ESPN Injuries | api.espn.com/v3 | ? | ❌ 401 | No funciona |
+| Sofascore | api.sofascore.com | No | ❌ 403 WAF | Bloqueado |
+| balldontlie.io | api.balldontlie.io | API Key | ⚠️ | Necesita key |
+| api-sports.io | api-sports.io | API Key | ? | Pago |
+| The Odds API | the-odds-api.com | API Key | ⚠️ | Funciona con key |
 
-```typescript
-@Global()
-@Module({
-  providers: [CacheService, SofascoreService, ESPNService, OddsService],
-  exports: [CacheService, SofascoreService, ESPNService, OddsService],
-})
-export class DataServicesModule {}
-```
+### Descubrimientos clave:
 
-Este módulo es GLOBAL para que cualquier módulo pueda injectar los servicios.
+1. **ESPN Scoreboard es MEJOR de lo esperado:**
+   - Incluye stats de equipos (PPG, FG%, rebotes, assists)
+   - Incluye records (home/away/overall)
+   - **Incluye ODDS de DraftKings** (moneyline, spread, totals)
+   - **NO NECESITA API KEY**
+   - Funciona para NBA inmediatamente
+
+2. **Sofascore está bloqueado por Cloudflare:**
+   - No es simple como agregar headers
+   - Necesita TLS fingerprinting (curl_cffi) o proxy
+   - Probablemente no vale la pena el esfuerzo si ESPN da buenos datos
+
+3. **Injuries son el problema:**
+   - ESPN injuries API no funciona
+   - Sofascore está bloqueado
+   - Alternativa: scraping de páginas simples (Rotowire, etc.)
 
 ---
 
-## 4. USO EN OTROS MÓDULOS
+## 4. ESTRATEGIA RECOMENDADA
 
-```typescript
-// Ejemplo en BetsModule
-import { SofascoreService, ESPNService, OddsService, CacheService } from '../services';
+### Para NBA (inmediato):
 
-constructor(
-  private readonly sofascoreService: SofascoreService,
-  private readonly espnService: ESPNService,
-  private readonly oddsService: OddsService,
-  private readonly cacheService: CacheService,
-) {}
+```
+ESPN Scoreboard API ──────→ Stats + Odds (GRATIS, FUNCIONA)
+                           ↓
+                    MiniMax para análisis
+                           ↓
+                    El usuario ingresa injuries manualmente
+                    (o busca en Rotowire injury page)
+```
+
+### Para Football/Tennis/Otros Sports:
+
+```
+The Odds API ──────────────→ Cuotas (requiere API key)
+ESPN (si existe) ─────────→ Stats (si funciona)
+                           ↓
+                    MiniMax para análisis
+```
+
+### Para Injuries (futuro):
+
+```
+Opciones:
+1. Rotowire scraping (fácil, HTML simple)
+2. PhysioRoom scraping (fácil)
+3. Configurar The Odds API para injuries (si soporta)
+4. Usuario ingresa manualmente
 ```
 
 ---
 
-## 5. PRÓXIMOS PASOS
+## 5. PLAN DE ACCIÓN
+
+### Inmediato (Fase 3):
+1. Crear `ESPNService.getScoreboardV2()` con endpoint que SÍ funciona
+2. Integrar con MiniMax para análisis
+3. **El usuario busca injuries manualmente** (o scrapeo simple de Rotowire)
+
+### Futuro (después de Fase 3):
+1. Configurar The Odds API con API key
+2. Implementar scraping de injuries desde Rotowire
+3. Opcional: investigar Sofascore con curl_cffi
+
+---
+
+## 6. PRÓXIMOS PASOS
 
 ### Fase 3: AI Integration (PENDIENTE)
 
 - [ ] Crear `MiniMaxService`
-- [ ] Crear `PromptBuilder` (integrar con basketballPrompts.ts del frontend)
+- [ ] Crear `ESPNService.getScoreboardV2()` (endpoint que funciona)
+- [ ] Crear `PromptBuilder` usando datos de ESPN
 - [ ] Endpoint `POST /bets/analyze`
 - [ ] Guardar análisis en tabla `analyses`
 
-### Fase 4: Frontend (PENDIENTE)
-
-- [ ] Nuevo diseño Match Search
-- [ ] Componente Analysis con markdown render
-- [ ] Input de cuota + cálculo de value
-- [ ] Botón "Registrar Apuesta"
-
 ---
 
-## 6. VARIABLES DE ENTORNO NECESARIAS
+## 7. VARIABLES DE ENTORNO
 
 ```bash
-# The Odds API (para cuotas)
+# The Odds API (OPCIONAL si ESPN Scoreboard tiene buenas cuotas)
 ODDS_API_KEY=your_odds_api_key
 
-# MiniMax API (para análisis IA) — se añadirá en Fase 3
+# MiniMax API (para análisis IA)
 MINIMAX_API_KEY=your_minimax_api_key
 ```
 
 ---
 
-## 7. NOTAS IMPORTANTES
+## 8. NOTAS IMPORTANTES
 
-1. **Sofascore y ESPN NO requieren API key** — funcionan out of the box
-2. **The Odds API requiere API key** — registrarse gratis en the-odds-api.com
-3. **Rate limiting de Sofascore:** 1 req/segundo — el servicio ya maneja esto
-4. **Cache inteligente:** Los datos se cachean automáticamente según el TTL
+1. **ESPN Scoreboard funciona** — usar como fuente principal de stats + odds para NBA
+2. **The Odds API es opcional** — ESPN ya tiene cuotas de DraftKings
+3. **Sofascore está bloqueado** — no es crítico si ESPN funciona
+4. **Injuries son elgap** — buscar alternativa o input manual
 
 ---
 
-## 8. TESTING — RESULTADOS 10 ABRIL 2026
-
-### Resultados de tests:
+## 9. TESTING — RESULTADOS COMPLETOS
 
 | Servicio | Status | Notas |
 |----------|--------|-------|
-| CacheService | ✅ Funcionando | 0 hits, 3 misses (esperado) |
-| SofascoreService | ❌ 403 WAF Blocked | Cloudflare bloquea requests |
-| ESPNService | ❌ 401 Unauthorized | API v3 requiere auth ahora |
-| OddsService | ⚠️ Sin API key | Esperado, necesita configurar |
-
-### DESCUBRIMIENTOS IMPORTANTES:
-
-#### 1. ESPN Scoreboard API (FUNCIONA!)
-El endpoint `site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard` funciona PERFECTO y devuelve:
-- Partidos del día ✅
-- Stats de equipos (PPG, FG%, rebotes) ✅
-- Records (home/away) ✅
-- **ODDS DE DRAFTKINGS** (moneyline, spreads, totals) ✅
-- Broadcast info ✅
-
-**Este endpoint ES MEJOR que lo que planeamos** —可以直接 obtener cuotas sin The Odds API!
-
-#### 2. Sofascore WAF
-Sofascore está bloqueando con Cloudflare. Posibles soluciones:
-- Usar `curl_cffi` (librería Python que emulate browsers)
-- Mejorar headers
-- Usar proxy
-
-### Plan de acción post-test:
-
-**ESPN:** Crear nuevo método `getScoreboardV2()` usando `site.api.espn.com`
-**Sofascore:** Investigar `curl_cffi` o usar ESPN como fuente principal
-**Odds API:** Requiere API key para funcionar
+| CacheService | ✅ OK | 0 hits, 3 misses |
+| SofascoreService | ❌ 403 WAF | Cloudflare bloquea |
+| ESPNService (v3) | ❌ 401 | API cambió |
+| ESPN Scoreboard | ✅ FUNCIONA | Stats + Odds! |
+| OddsService | ⚠️ Sin test | Necesita API key |
 
 ---
 
 *Documento creado: 2026-04-10*
-*Última actualización: 2026-04-10 22:42 UTC*
+*Última actualización: 2026-04-10 22:50 UTC*
