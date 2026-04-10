@@ -23,7 +23,7 @@ export class Parlay {
   @Column({ name: 'user_id', type: 'uuid' })
   userId: string;
 
-  @Column({ name: 'bet_ids', type: 'jsonb' })
+  @Column({ name: 'bet_ids', type: 'json' })
   betIds: string[];
 
   @Column({ name: 'combined_odds', type: 'decimal', precision: 8, scale: 4 })
