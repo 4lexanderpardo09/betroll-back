@@ -262,32 +262,42 @@ MINIMAX_API_KEY=your_minimax_api_key
 
 ---
 
-## 8. TESTING
+## 8. TESTING — RESULTADOS 10 ABRIL 2026
 
-### Probar servicios manualmente:
+### Resultados de tests:
 
-```bash
-# Arrancar el servidor
-npm run start:dev
+| Servicio | Status | Notas |
+|----------|--------|-------|
+| CacheService | ✅ Funcionando | 0 hits, 3 misses (esperado) |
+| SofascoreService | ❌ 403 WAF Blocked | Cloudflare bloquea requests |
+| ESPNService | ❌ 401 Unauthorized | API v3 requiere auth ahora |
+| OddsService | ⚠️ Sin API key | Esperado, necesita configurar |
 
-# Test en otra terminal:
-# (los servicios se injectan automáticamente en otros módulos)
-```
+### DESCUBRIMIENTOS IMPORTANTES:
 
-### Ejemplo de uso en código:
+#### 1. ESPN Scoreboard API (FUNCIONA!)
+El endpoint `site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard` funciona PERFECTO y devuelve:
+- Partidos del día ✅
+- Stats de equipos (PPG, FG%, rebotes) ✅
+- Records (home/away) ✅
+- **ODDS DE DRAFTKINGS** (moneyline, spreads, totals) ✅
+- Broadcast info ✅
 
-```typescript
-// Obtener datos de un partido
-const matchData = await this.sofascoreService.getMatchData('11550211');
+**Este endpoint ES MEJOR que lo que planeamos** —可以直接 obtener cuotas sin The Odds API!
 
-// Obtener injuries
-const injuries = await this.espnService.getTeamInjuries('basketball', 'nba', '588');
+#### 2. Sofascore WAF
+Sofascore está bloqueando con Cloudflare. Posibles soluciones:
+- Usar `curl_cffi` (librería Python que emulate browsers)
+- Mejorar headers
+- Usar proxy
 
-// Obtener cuotas
-const odds = await this.oddsService.getOdds('basketball_nba', ['us'], ['h2h', 'spreads']);
-```
+### Plan de acción post-test:
+
+**ESPN:** Crear nuevo método `getScoreboardV2()` usando `site.api.espn.com`
+**Sofascore:** Investigar `curl_cffi` o usar ESPN como fuente principal
+**Odds API:** Requiere API key para funcionar
 
 ---
 
 *Documento creado: 2026-04-10*
-*Última actualización: 2026-04-10 22:35 UTC*
+*Última actualización: 2026-04-10 22:42 UTC*
