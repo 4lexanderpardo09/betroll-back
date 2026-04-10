@@ -3,18 +3,23 @@ import { CacheService } from './cache.service';
 
 @Injectable()
 export class ESPNService {
-  private readonly baseUrl = 'https://api.espn.com/v3';
+  // Note: ESPN has multiple APIs with different base URLs
+  // api.espn.com/v3 - Original API (some endpoints require auth now)
+  // site.api.espn.com/apis/site/v2 - Site API (works for scoreboard, injuries)
+  // sports.core.api.espn.com/v2 - Core API (stats, splits)
+
+  private readonly siteApiUrl = 'https://site.api.espn.com/apis/site/v2';
+  private readonly coreApiUrl = 'https://sports.core.api.espn.com/v2';
   private readonly logger = new Logger(ESPNService.name);
 
   private readonly headers = {
-    'User-Agent': 'Mozilla/5.0',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     Accept: 'application/json',
   };
 
   constructor(private readonly cacheService: CacheService) {}
 
-  private async fetch<T>(endpoint: string): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
+  private async fetch<T>(url: string): Promise<T> {
     this.logger.debug(`Fetching: ${url}`);
 
     const response = await fetch(url, { headers: this.headers });
@@ -28,295 +33,507 @@ export class ESPNService {
 
   private async fetchWithCache<T>(
     key: string,
-    endpoint: string,
+    url: string,
     ttlMs: number,
   ): Promise<T> {
     return this.cacheService.getOrFetch(
       key,
-      () => this.fetch<T>(endpoint),
+      () => this.fetch<T>(url),
       ttlMs,
     );
   }
 
-  // ==================== INJURIES ====================
+  // ==================== SCOREBOARD (SITE API v2) ====================
+  // This is the MAIN endpoint for getting games, stats, and odds
 
   /**
-   * Get injury report for a sport/league
-   * @param sport basketball, football, baseball, hockey
+   * Get scoreboard with games, stats, and DRAFTKINGS ODDS
+   * This is the PRIMARY endpoint for betting data
+   *
+   * @param sport basketball, football, baseball
    * @param league nba, nfl, mlb, nhl
+   * @param dates YYYY-MM-DD format, or omit for today
    */
-  async getInjuries(
-    sport: string,
-    league: string,
-  ): Promise<ESPNInjury[]> {
-    const cacheKey = CacheService.buildKey('espn', 'injuries', sport, league);
-    const data = await this.fetchWithCache<ESPNInjuryResponse>(
-      cacheKey,
-      `/sports/${sport}/${league}/injuries`,
-      CacheService.TTL.INJURIES,
-    );
-    return data.sports?.[0]?.leagues?.[0]?.athletes || [];
-  }
-
-  /**
-   * Get injuries for a specific team
-   */
-  async getTeamInjuries(
-    sport: string,
-    league: string,
-    teamId: string,
-  ): Promise<ESPNInjury[]> {
-    const allInjuries = await this.getInjuries(sport, league);
-    return allInjuries.filter(
-      (injury) => injury.athlete?.team?.id?.toString() === teamId,
-    );
-  }
-
-  // ==================== NEWS ====================
-
-  /**
-   * Get recent news for a sport/league
-   */
-  async getNews(
-    sport: string,
-    league: string,
-    limit = 10,
-  ): Promise<ESPNNewsArticle[]> {
-    const cacheKey = CacheService.buildKey('espn', 'news', sport, league, limit);
-    const data = await this.fetchWithCache<ESPNNewsResponse>(
-      cacheKey,
-      `/sports/${sport}/${league}/news?limit=${limit}`,
-      CacheService.TTL.NEWS,
-    );
-    return data.articles || [];
-  }
-
-  // ==================== SCOREBOARD ====================
-
-  /**
-   * Get scoreboard for a specific date
-   */
-  async getScoreboard(
+  async getScoreboardV2(
     sport: string,
     league: string,
     dates?: string,
-  ): Promise<ESPNGame[]> {
-    const cacheKey = CacheService.buildKey(
-      'espn',
-      'scoreboard',
-      sport,
-      league,
-      dates || 'today',
-    );
-    const endpoint = dates
-      ? `/sports/${sport}/${league}/scoreboard?dates=${dates}`
-      : `/sports/${sport}/${league}/scoreboard`;
-    const data = await this.fetchWithCache<ESPNScoreboardResponse>(
+  ): Promise<ESPNScoreboardV2Event[]> {
+    const cacheKey = CacheService.buildKey('espn', 'scoreboardv2', sport, league, dates || 'today');
+    const url = dates
+      ? `${this.siteApiUrl}/sports/${sport}/${league}/scoreboard?dates=${dates}`
+      : `${this.siteApiUrl}/sports/${sport}/${league}/scoreboard`;
+
+    const data = await this.fetchWithCache<ESPNScoreboardV2Response>(
       cacheKey,
-      endpoint,
+      url,
       CacheService.TTL.MATCH_STATS,
     );
-    return data.sports?.[0]?.leagues?.[0]?.events || [];
+
+    return data.events || [];
   }
 
-  // ==================== STANDINGS ====================
+  // ==================== INJURIES (SITE API v2) ====================
+  // Works! Returns detailed injury info with return dates
 
   /**
-   * Get standings for a sport/league
+   * Get injury report for a league
+   * Returns ~20-30 current injuries with detailed info
    */
-  async getStandings(
+  async getInjuriesV2(
     sport: string,
     league: string,
-  ): Promise<ESPNStandingEntry[]> {
-    const cacheKey = CacheService.buildKey('espn', 'standings', sport, league);
-    const data = await this.fetchWithCache<ESPNStandingsResponse>(
+  ): Promise<ESPNInjuryV2[]> {
+    const cacheKey = CacheService.buildKey('espn', 'injuriesv2', sport, league);
+    const url = `${this.siteApiUrl}/sports/${sport}/${league}/injuries`;
+
+    const data = await this.fetchWithCache<ESPNInjuriesV2Response>(
       cacheKey,
-      `/sports/${sport}/${league}/standings`,
-      CacheService.TTL.STANDINGS,
+      url,
+      CacheService.TTL.INJURIES,
     );
-    return data.sports?.[0]?.leagues?.[0]?.standings?.[0]?.entries || [];
+
+    return data.injuries || [];
   }
 
-  // ==================== TEAMS ====================
-
   /**
-   * Get all teams for a sport/league
+   * Get injuries for a specific team by team ID
    */
-  async getTeams(
+  async getTeamInjuriesV2(
     sport: string,
     league: string,
-  ): Promise<ESPNTeamWrapper[]> {
-    const cacheKey = CacheService.buildKey('espn', 'teams', sport, league);
-    const data = await this.fetchWithCache<ESPNTeamsResponse>(
-      cacheKey,
-      `/sports/${sport}/${league}/teams`,
-      CacheService.TTL.STANDINGS,
+    teamId: string,
+  ): Promise<ESPNInjuryV2[]> {
+    const allInjuries = await this.getInjuriesV2(sport, league);
+    return allInjuries.filter(
+      (injury) => injury.teamReference?.toString() === teamId,
     );
-    return data.sports?.[0]?.leagues?.[0]?.teams || [];
   }
 
-  // ==================== COMPILED DATA ====================
+  // ==================== ROSTER / TEAM DETAILS ====================
 
   /**
-   * Get injury data formatted for a match
+   * Get team roster with player details
    */
-  async getMatchInjuries(
-    homeTeamId: string,
-    awayTeamId: string,
-    sport: string = 'basketball',
-    league: string = 'nba',
+  async getTeamRoster(
+    sport: string,
+    league: string,
+    teamId: string,
+  ): Promise<ESPNTeamRoster> {
+    const cacheKey = CacheService.buildKey('espn', 'roster', sport, league, teamId);
+    const url = `${this.siteApiUrl}/sports/${sport}/${league}/teams/${teamId}/roster`;
+
+    return this.fetchWithCache<ESPNTeamRoster>(
+      cacheKey,
+      url,
+      CacheService.TTL.TEAM_FORM,
+    );
+  }
+
+  // ==================== SUMMARY (ENRICHED GAME DATA) ====================
+
+  /**
+   * Get detailed game summary with advanced stats
+   */
+  async getGameSummary(
+    sport: string,
+    league: string,
+    eventId: string,
+  ): Promise<ESPNGameSummary> {
+    const cacheKey = CacheService.buildKey('espn', 'summary', sport, league, eventId);
+    const url = `${this.siteApiUrl}/sports/${sport}/${league}/summary?event=${eventId}`;
+
+    return this.fetchWithCache<ESPNGameSummary>(
+      cacheKey,
+      url,
+      CacheService.TTL.MATCH_STATS,
+    );
+  }
+
+  // ==================== PLAYER STATS (CORE API) ====================
+
+  /**
+   * Get player statistics from Core API
+   */
+  async getPlayerStats(
+    sport: string,
+    league: string,
+    athleteId: string,
+  ): Promise<ESPNPlayerStats> {
+    const cacheKey = CacheService.buildKey('espn', 'playerstats', athleteId);
+    const url = `${this.coreApiUrl}/sports/${sport}/leagues/${league}/athletes/${athleteId}/statistics`;
+
+    return this.fetchWithCache<ESPNPlayerStats>(
+      cacheKey,
+      url,
+      CacheService.TTL.TEAM_FORM,
+    );
+  }
+
+  // ==================== COMPILED MATCH DATA ====================
+
+  /**
+   * Get all relevant data for a match from ESPN
+   */
+  async getMatchData(
+    sport: string,
+    league: string,
+    eventId: string,
   ): Promise<{
-    homeInjuries: ESPNInjury[];
-    awayInjuries: ESPNInjury[];
-    allInjuries: ESPNInjury[];
+    summary: ESPNGameSummary | null;
+    injuries: ESPNInjuryV2[];
   }> {
-    const allInjuries = await this.getInjuries(sport, league);
-    const homeInjuries = allInjuries.filter(
-      (i) => i.athlete?.team?.id?.toString() === homeTeamId,
-    );
-    const awayInjuries = allInjuries.filter(
-      (i) => i.athlete?.team?.id?.toString() === awayTeamId,
-    );
+    try {
+      const [summary, injuries] = await Promise.all([
+        this.getGameSummary(sport, league, eventId).catch(() => null),
+        this.getInjuriesV2(sport, league).catch(() => []),
+      ]);
 
-    return {
-      homeInjuries,
-      awayInjuries,
-      allInjuries,
-    };
+      return { summary, injuries };
+    } catch (error) {
+      this.logger.error(`Error fetching match data:`, error);
+      throw error;
+    }
   }
 }
 
-// ==================== TYPES ====================
+// ==================== TYPES FOR SITE API v2 ====================
 
-export interface ESPNInjury {
-  athlete?: {
-    id?: string;
-    fullName?: string;
-    position?: string;
-    team?: {
-      id?: string;
-      name?: string;
+export interface ESPNScoreboardV2Event {
+  id: string;
+  uid: string;
+  date: string;
+  name: string;
+  competition: string;
+  status: {
+    period: number;
+    displayClock: string;
+    type: {
+      id: string;
+      name: string;
+      completed: boolean;
     };
   };
-  injury?: {
-    type?: string;
-    status?: string;
-    description?: string;
-  };
-  date?: string;
-}
-
-export interface ESPNInjuryResponse {
-  sports: ESPNInjurySport[];
-}
-
-export interface ESPNInjurySport {
-  leagues?: ESPNInjuryLeague[];
-}
-
-export interface ESPNInjuryLeague {
-  athletes?: ESPNInjury[];
-}
-
-export interface ESPNNewsArticle {
-  headline?: string;
-  description?: string;
-  published?: string;
-  images?: { url: string }[];
-  links?: {
-    web?: { href?: string };
-  };
-}
-
-export interface ESPNNewsResponse {
-  articles?: ESPNNewsArticle[];
-}
-
-export interface ESPNGame {
-  id?: string;
-  date?: string;
-  name?: string;
-  competitions?: ESPNCompetition[];
+  competitions: ESPNCompetition[];
 }
 
 export interface ESPNCompetition {
-  homeTeam?: {
-    team?: {
-      id?: string;
-      name?: string;
+  id: string;
+  uid: string;
+  date: string;
+  status: ESPNCompetitionStatus;
+  attendance?: number;
+  venue?: {
+    id: string;
+    name: string;
+    address: {
+      city: string;
+      state: string;
     };
-    score?: string;
   };
-  awayTeam?: {
-    team?: {
-      id?: string;
-      name?: string;
+  competitors: ESPNCompetitor[];
+  details?: ESPNCompetitionDetail[];
+  odds?: ESPNOdds[];
+  leaders?: ESPNLeader[];
+  situation?: ESPSituation;
+}
+
+export interface ESPNCompetitor {
+  id: string;
+  uid: string;
+  type: string;
+  order: number;
+  homeAway: 'home' | 'away';
+  team: {
+    id: string;
+    uid: string;
+    name: string;
+    abbreviation: string;
+    displayName: string;
+    logo: string;
+    links?: { rel: string[]; href: string }[];
+  };
+  score?: string;
+  linescores?: { value: string }[];
+  records?: { id: string; summary: string; type: string }[];
+  statistics?: ESPNCompetitorStat[];
+  leaders?: ESPNLeader[];
+}
+
+export interface ESPNCompetitorStat {
+  name: string;
+  displayName: string;
+  shortDisplayName: string;
+  value: string;
+  displayValue: string;
+  rank?: string;
+  summary?: string;
+}
+
+export interface ESPNCompetitionStatus {
+  period: number;
+  displayClock: string;
+  type: {
+    id: string;
+    name: string;
+    state: string;
+    completed: boolean;
+  };
+}
+
+export interface ESPNCompetitionDetail {
+  label: string;
+  value: string;
+}
+
+export interface ESPNOdds {
+  provider: {
+    id: number;
+    name: string;
+    priority: number;
+  };
+  details?: string;
+  overTotal?: number;
+  underTotal?: number;
+  awayTeamOdds?: {
+    price: number;
+    differential?: number;
+  };
+  homeTeamOdds?: {
+    price: number;
+    differential?: number;
+  };
+  spread?: {
+    awayTeamOdds: number;
+    homeTeamOdds: number;
+    awayTeamLine: number;
+    homeTeamLine: number;
+  };
+  moneyline?: {
+    awayTeamOdds: number;
+    homeTeamOdds: number;
+  };
+}
+
+export interface ESPNLeader {
+  leader: {
+    id: string;
+    fullName: string;
+    displayName: string;
+    headshot: string;
+    team: { id: string; name: string };
+  };
+  stats: {
+    stat: string;
+    value: string;
+    displayValue: string;
+    rank?: string;
+  }[];
+}
+
+export interface ESPSituation {
+  possession?: string;
+  downDistanceText?: string;
+  possessionArrow?: string;
+  lastPlay?: {
+    text: string;
+    probability: {
+      homeWinPercentage: number;
+      awayWinPercentage: number;
     };
-    score?: string;
-  };
-  status?: {
-    displayClock?: string;
-    period?: number;
   };
 }
 
-export interface ESPNScoreboardResponse {
-  sports?: ESPNScoreboardSport[];
-}
-
-export interface ESPNScoreboardSport {
-  leagues?: ESPNScoreboardLeague[];
-}
-
-export interface ESPNScoreboardLeague {
-  events?: ESPNGame[];
-}
-
-export interface ESPNStandingEntry {
-  team?: {
-    id?: string;
-    name?: string;
-    abbreviation?: string;
+export interface ESPNScoreboardV2Response {
+  uid: string;
+  id: string;
+  status: string;
+  season: {
+    year: number;
+    type: number;
+    name: string;
   };
-  stats?: { value?: number; name?: string }[];
+  competitions: ESPNCompetition[];
+  events: ESPNScoreboardV2Event[];
 }
 
-export interface ESPNStandingGroup {
-  name?: string;
-  entries?: ESPNStandingEntry[];
+// ==================== INJURY TYPES ====================
+
+export interface ESPNInjuriesV2Response {
+  timestamp: string;
+  status: string;
+  season: {
+    year: number;
+    type: number;
+    name: string;
+  };
+  injuries: ESPNInjuryV2[];
 }
 
-export interface ESPNStandingsResponse {
-  sports?: ESPNStandingsSport[];
+export interface ESPNInjuryV2 {
+  id: string;
+  uid: string;
+  type: {
+    id: string;
+    name: string;
+    description: string;
+  };
+  detail: string;
+  shortDetail: string;
+  longDetail: string;
+  returnDate?: string;
+  player?: {
+    id: string;
+    uid: string;
+    fullName: string;
+    displayName: string;
+    headline: string;
+    position: {
+      id: string;
+      name: string;
+      abbreviation: string;
+    };
+    team: {
+      id: string;
+      uid: string;
+      slug: string;
+      name: string;
+      abbreviation: string;
+      displayName: string;
+      logo: string;
+    };
+    headshot: {
+      href: string;
+      alt: string;
+    };
+    jersey: string;
+    height: string;
+    weight: string;
+    age: number;
+    birthPlace: {
+      city: string;
+      state: string;
+      country: string;
+    };
+    college?: {
+      id: string;
+      name: string;
+    };
+    rookieYear?: number;
+  };
+  teamReference?: string;
 }
 
-export interface ESPNStandingsSport {
-  leagues?: ESPNStandingsLeague[];
+// ==================== ROSTER TYPES ====================
+
+export interface ESPNTeamRoster {
+  team: {
+    id: string;
+    name: string;
+    abbreviation: string;
+    displayName: string;
+  };
+  athletes: {
+    id: string;
+    fullName: string;
+    displayName: string;
+    jersey: string;
+    position: {
+      abbreviation: string;
+    };
+    height: string;
+    weight: string;
+    age: number;
+    experience: string;
+    college?: string;
+    statistics?: Record<string, any>[];
+  }[];
 }
 
-export interface ESPNStandingsLeague {
-  standings?: ESPNStandingGroup[];
+// ==================== SUMMARY TYPES ====================
+
+export interface ESPNGameSummary {
+  header: {
+    id: string;
+    week: number;
+    season: {
+      year: number;
+      type: number;
+    };
+    competition: string;
+  };
+  boxScore?: ESPNBoxScore;
+  gameInfo?: ESPNGameInfo;
+  series?: ESPNSeries;
 }
 
-export interface ESPNTeam {
-  id?: string;
-  name?: string;
-  abbreviation?: string;
-  logos?: { href: string }[];
+export interface ESPNBoxScore {
+  teams: {
+    team: {
+      id: string;
+      name: string;
+      abbreviation: string;
+    };
+    statistics: {
+      name: string;
+      displayName: string;
+      value: string;
+    }[];
+    players: {
+      athlete: {
+        id: string;
+        fullName: string;
+      };
+      statistics: {
+        name: string;
+        value: string;
+      }[];
+    }[];
+  }[];
 }
 
-export interface ESPNTeamsResponse {
-  sports?: ESPNTeamsSport[];
+export interface ESPNGameInfo {
+  venue: {
+    name: string;
+    city: string;
+  };
+  attendance: number;
+  officials: {
+    name: string;
+    role: string;
+  }[];
 }
 
-export interface ESPNTeamsSport {
-  leagues?: ESPNTeamsLeague[];
+export interface ESPNSeries {
+  type: string;
+  title: string;
+  summary: string;
+  events: {
+    id: string;
+    date: string;
+    competition: string;
+    winner: {
+      id: string;
+      name: string;
+    };
+  }[];
 }
 
-export interface ESPNTeamsLeague {
-  teams?: ESPNTeamWrapper[];
-}
+// ==================== PLAYER STATS TYPES ====================
 
-export interface ESPNTeamWrapper {
-  team?: ESPNTeam;
+export interface ESPNPlayerStats {
+  athlete: {
+    id: string;
+    displayName: string;
+  };
+  categories: {
+    name: string;
+    displayName: string;
+    stats: {
+      name: string;
+      displayName: string;
+      value: string;
+      rank?: string;
+    }[];
+  }[];
 }
