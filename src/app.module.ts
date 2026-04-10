@@ -7,6 +7,7 @@ import { BankrollModule } from './bankroll/bankroll.module';
 import { BetsModule } from './bets/bets.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { ParlaysModule } from './parlays/parlays.module';
+import { DataServicesModule } from './services/data-services.module';
 import { HealthController } from './health.controller';
 import { User } from './users/entities/user.entity';
 import { Bankroll } from './bankroll/entities/bankroll.entity';
@@ -44,6 +45,7 @@ import { Parlay } from './parlays/entities/parlay.entity';
     BetsModule,
     AnalyticsModule,
     ParlaysModule,
+    DataServicesModule,
   ],
   controllers: [HealthController],
 })
