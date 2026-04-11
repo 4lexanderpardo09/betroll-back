@@ -232,7 +232,6 @@ DATOS DEL PARTIDO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EQUIPO LOCAL: ${matchData.homeTeam}
 EQUIPO VISITANTE: ${matchData.awayTeam}
-BANKROLL: ${formattedBankroll}
 
 `;
 
@@ -324,13 +323,13 @@ Genera un análisis deportivo completo y profesional con las siguientes seccione
 6️⃣ JUGADORES CLAVE — ${matchData.awayTeam.toUpperCase()}
 7️⃣ MATCHUPS CRÍTICOS — Ventajas individuales
 8️⃣ REBOTES Y POSESIONES — Control del tablero
-9️⃣ TENDENCIAS DE APUESTAS — Lines movement y mercado
+9️⃣ TENDENCIAS DEL PARTIDO — Momentum y forma recent
 🔟 HISTORIAL H2H — Encuentros recientes
 1️⃣1️⃣ FACTOR LOCALÍA — Rendimiento en casa vs fuera
 1️⃣2️⃣ FATIGA Y CALENDARIO — Descanso entre partidos
 1️⃣3️⃣ LESIONES Y ROTACIONES — Impacto en el roster
 1️⃣4️⃣ ESTILO DE JUEGO — Pace, matchup táctico
-1️⃣5️⃣ PROBABILIDAD IMPLÍCITA — Análisis de las cuotas
+1️⃣5️⃣ COMPARACIÓN ESTADÍSTICA — Cómo proyectan los modelos
 1️⃣6️⃣ PREDICCIÓN DE RESULTADO — Score esperado
 1️⃣7️⃣ RESUMEN EJECUTIVO — Conclusión del análisis
 

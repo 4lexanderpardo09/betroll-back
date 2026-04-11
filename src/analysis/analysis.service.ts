@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { MiniMaxService } from '../services/minimax.service';
 import { ESPNService } from '../services/espn.service';
+import { OddsService } from '../services/odds.service';
 import { Analysis } from './entities/analysis.entity';
 
 @Injectable()
@@ -22,6 +23,7 @@ export class AnalysisService {
     private analysisRepository: Repository<Analysis>,
     private readonly minimaxService: MiniMaxService,
     private readonly espnService: ESPNService,
+    private readonly oddsService: OddsService,
   ) {}
 
   async analyzeMatch(
@@ -118,6 +120,64 @@ export class AnalysisService {
           (inj: any) => inj.teamDisplayName?.includes(awayTeam.split(' ')[0]),
         ),
       };
+    }
+
+    // Get real market odds from The Odds API
+    try {
+      const oddsSportMap: Record<string, string> = {
+        BASKETBALL: 'basketball_nba',
+        FOOTBALL: 'americanfootball_nfl',
+        SOCCER: 'soccer_epl',
+        TENNIS: 'tennis_atp',
+      };
+      const sportKey = oddsSportMap[sport] || 'basketball_nba';
+      const oddsData = await this.oddsService.getOdds(sportKey);
+      
+      if (oddsData && oddsData.length > 0) {
+        // Find matching event
+        const match = oddsData.find(
+          (o) =>
+            o.home_team.toLowerCase().includes(homeTeam.toLowerCase()) ||
+            homeTeam.toLowerCase().includes(o.home_team.toLowerCase()) ||
+            o.away_team.toLowerCase().includes(awayTeam.toLowerCase()) ||
+            awayTeam.toLowerCase().includes(o.away_team.toLowerCase()),
+        );
+        
+        if (match) {
+          // Get moneyline (h2h) odds
+          const matchOdds = this.oddsService.getMatchOddsComparison(match.bookmakers, homeTeam, awayTeam);
+          if (matchOdds) {
+            matchData.odds = {
+              moneyline: {
+                home: matchOdds.home.price,
+                away: matchOdds.away.price,
+              },
+            };
+            this.logger.log(`Market odds loaded: ${homeTeam} vs ${awayTeam} - Home: ${matchOdds.home.price}, Away: ${matchOdds.away.price}`);
+          }
+          
+          // Get spread and totals using getBestOdds
+          const homeSpread = this.oddsService.getBestOdds(match.bookmakers, homeTeam, 'spreads');
+          const awaySpread = this.oddsService.getBestOdds(match.bookmakers, awayTeam, 'spreads');
+          const overTotal = this.oddsService.getBestOdds(match.bookmakers, 'over', 'totals');
+          const underTotal = this.oddsService.getBestOdds(match.bookmakers, 'under', 'totals');
+          
+          if (homeSpread && awaySpread && homeSpread.point !== undefined) {
+            matchData.odds.spread = {
+              line: homeSpread.point,
+              price: homeSpread.price,
+            };
+          }
+          if (overTotal && underTotal && overTotal.point !== undefined) {
+            matchData.odds.total = {
+              line: overTotal.point,
+              price: overTotal.price,
+            };
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.warn(`Could not fetch market odds: ${error.message}`);
     }
 
     const userBankroll = 500000;
