@@ -4,6 +4,28 @@ import { ESPNService } from '../../services/espn.service';
 import { MiniMaxService } from '../../services/minimax.service';
 import { NflPromptBuilder, NflPromptData } from './nfl-prompt.builder';
 
+const NFL_PROP_MARKETS = [
+  'player_pass_tds',
+  'player_pass_yards',
+  'player_rush_yards',
+  'player_receptions',
+  'player_reception_yards',
+  'player_anytime_td',
+  'player_pass_completions',
+  'player_rush_receptions',
+];
+
+const NFL_PROP_LABELS: Record<string, string> = {
+  player_pass_tds: 'Pass TDs',
+  player_pass_yards: 'Pass Yards',
+  player_rush_yards: 'Rush Yards',
+  player_receptions: 'Recepciones',
+  player_reception_yards: 'Rec Yards',
+  player_anytime_td: 'Anytime TD',
+  player_pass_completions: 'Pass Completions',
+  player_rush_receptions: 'Rush+Rec Yards',
+};
+
 @Injectable()
 export class NflAnalysisService {
   private readonly logger = new Logger(NflAnalysisService.name);
@@ -33,10 +55,17 @@ export class NflAnalysisService {
 
     // 1. Get complete odds data from The Odds API
     const oddsData = await this.oddsApiService.getCompleteMatchData(
-      'NFL',
+      'americanfootball_nfl',
       homeTeam,
       awayTeam,
       matchDate,
+      {
+        teamMarkets: ['h2h', 'spreads', 'totals'],
+        teamRegions: ['us'],
+        propMarkets: NFL_PROP_MARKETS,
+        propLabels: NFL_PROP_LABELS,
+        scoreDaysFrom: 3,
+      },
     );
 
     this.logger.log(`Odds API usage — remaining: ${oddsData.apiUsage.remaining}, used: ${oddsData.apiUsage.used}`);

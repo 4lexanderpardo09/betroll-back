@@ -51,37 +51,38 @@ export interface BookmakerOdds {
 export interface TeamMarketOdds {
   homeTeam: string;
   awayTeam: string;
-  // Moneyline
+  // Moneyline — 2-way (NBA, NFL) o 3-way (soccer: home/draw/away)
   moneyline: {
     home: BookmakerOdds[];
     away: BookmakerOdds[];
-    consensus: { home: number; away: number }; // mejor cuota de cada lado
-    range: { min: number; max: number };        // rango entre casas
-    impliedProbHome: number;                    // prob implícita promedio
+    draw?: BookmakerOdds[];                  // solo soccer (3-way h2h)
+    consensus: { home: number; away: number; draw?: number };
+    range: { min: number; max: number };
+    impliedProbHome: number;
     impliedProbAway: number;
+    impliedProbDraw?: number;
   };
-  // Spread
+  // Spread — null si el sport no lo usa
   spread: {
-    line: number;                               // punto más común
+    line: number;
     home: BookmakerOdds[];
     away: BookmakerOdds[];
     consensus: { homePrice: number; awayPrice: number };
-    openingLine?: number;                       // si hay movimiento
   } | null;
-  // Total
+  // Total — null si el sport no lo usa
   total: {
     line: number;
     over: BookmakerOdds[];
     under: BookmakerOdds[];
     consensus: { overPrice: number; underPrice: number };
-    range: { min: number; max: number };        // rango de líneas entre casas
+    range: { min: number; max: number };
   } | null;
 }
 
 export interface PlayerPropLine {
   player: string;
-  market: string;          // 'player_points', 'player_rebounds', etc.
-  marketLabel: string;     // 'Puntos', 'Rebotes', etc.
+  market: string;
+  marketLabel: string;
   line: number;
   overPrice: number;
   underPrice: number;
@@ -94,7 +95,6 @@ export interface PlayerPropsData {
   homeTeam: string;
   awayTeam: string;
   props: PlayerPropLine[];
-  // Agrupado por jugador para fácil acceso
   byPlayer: Record<string, PlayerPropLine[]>;
 }
 
@@ -119,7 +119,7 @@ export interface EventInfo {
 }
 
 // ─────────────────────────────────────────────
-// DATOS COMPLETOS PARA EL LLM (un solo objeto)
+// DATOS COMPLETOS PARA EL LLM
 // ─────────────────────────────────────────────
 
 export interface CompleteMatchOddsData {
@@ -129,7 +129,7 @@ export interface CompleteMatchOddsData {
   commenceTime: string;
   teamOdds: TeamMarketOdds;
   playerProps: PlayerPropsData;
-  recentScores: MatchScore[];   // forma reciente (últimos 3 días)
+  recentScores: MatchScore[];
   apiUsage: {
     remaining: string | null;
     used: string | null;
@@ -158,48 +158,7 @@ function averagePrice(odds: BookmakerOdds[]): number {
 }
 
 // ─────────────────────────────────────────────
-// SPORT KEY MAP
-// ─────────────────────────────────────────────
-
-const SPORT_KEY_MAP: Record<string, string> = {
-  NBA: 'basketball_nba',
-  NFL: 'americanfootball_nfl',
-  MLB: 'baseball_mlb',
-  NHL: 'icehockey_nhl',
-  EPL: 'soccer_epl',
-  MLS: 'soccer_usa_mls',
-  TENNIS_ATP: 'tennis_atp',
-  TENNIS_WTA: 'tennis_wta',
-  MMA: 'mma_mixed_martial_arts',
-};
-
-// Mercados de props que usamos para el análisis
-const PLAYER_PROP_MARKETS = [
-  'player_points',
-  'player_rebounds',
-  'player_assists',
-  'player_threes',
-  'player_points_rebounds_assists',
-  'player_points_rebounds',
-  'player_points_assists',
-  'player_blocks',
-  'player_steals',
-];
-
-const PLAYER_PROP_LABELS: Record<string, string> = {
-  player_points: 'Puntos',
-  player_rebounds: 'Rebotes',
-  player_assists: 'Asistencias',
-  player_threes: 'Triples',
-  player_points_rebounds_assists: 'PRA',
-  player_points_rebounds: 'Puntos+Rebotes',
-  player_points_assists: 'Puntos+Asistencias',
-  player_blocks: 'Tapones',
-  player_steals: 'Robos',
-};
-
-// ─────────────────────────────────────────────
-// SERVICIO PRINCIPAL
+// SERVICIO 100% GENÉRICO
 // ─────────────────────────────────────────────
 
 @Injectable()
@@ -207,7 +166,6 @@ export class OddsApiService {
   private readonly baseUrl = 'https://api.the-odds-api.com/v4';
   private readonly logger = new Logger(OddsApiService.name);
 
-  // Guardamos el último header de uso para reportarlo
   private lastUsage = { remaining: null as string | null, used: null as string | null };
 
   constructor(private configService: ConfigService) {}
@@ -218,50 +176,66 @@ export class OddsApiService {
     return key;
   }
 
-  static getSportKey(sport: string): string {
-    return SPORT_KEY_MAP[sport.toUpperCase()] ?? 'basketball_nba';
-  }
-
   // ─────────────────────────────────────────────
-  // MÉTODO PRINCIPAL — trae todo lo que el LLM necesita
+  // MÉTODO PRINCIPAL — orquestador genérico
+  // Cada sport service decide qué markets/regions pasar
   // ─────────────────────────────────────────────
 
-  /**
-   * Orquesta todas las llamadas necesarias para un partido.
-   * Retorna un objeto listo para inyectar en el prompt del LLM.
-   *
-   * Costo estimado: ~10 créditos por partido
-   *   - /events:               0
-   *   - /odds (3 mercados):    3
-   *   - /events/{id}/odds (5 props): 5
-   *   - /scores:               2
-   */
   async getCompleteMatchData(
-    sport: string,
+    sportKey: string,  // The Odds API sport key directly (e.g. 'basketball_nba', 'americanfootball_nfl')
     homeTeam: string,
     awayTeam: string,
-    matchDate: string, // ISO: '2026-04-11'
+    matchDate: string,
+    options?: {
+      teamMarkets?: string[];
+      teamRegions?: string[];
+      propMarkets?: string[];
+      propLabels?: Record<string, string>;
+      scoreDaysFrom?: number;
+    },
   ): Promise<CompleteMatchOddsData> {
-    const sportKey = OddsApiService.getSportKey(sport);
 
-    // 1. Obtener ID del evento (gratis)
+    // 1. Buscar evento (gratis)
     const event = await this.findEvent(sportKey, homeTeam, awayTeam, matchDate);
     if (!event) {
       throw new InternalServerErrorException(
         `Evento no encontrado: ${homeTeam} vs ${awayTeam} en ${matchDate}`,
       );
     }
-
     this.logger.log(`Evento encontrado: ${event.id} — ${event.homeTeam} vs ${event.awayTeam}`);
 
-    // 2. Cuotas de equipo: ML + spread + total (costo: 3)
-    const teamOdds = await this.getTeamMarketOdds(sportKey, event.id, event.homeTeam, event.awayTeam);
+    // 2. Cuotas de equipo (costo según markets)
+    const teamMarkets = options?.teamMarkets ?? ['h2h', 'spreads', 'totals'];
+    const teamRegions = options?.teamRegions ?? ['us'];
+    const teamOdds = await this.getTeamMarketOdds(
+      sportKey,
+      event.id,
+      event.homeTeam,
+      event.awayTeam,
+      teamMarkets,
+      teamRegions,
+    );
 
-    // 3. Props de jugadores (costo: 5)
-    const playerProps = await this.getPlayerProps(sportKey, event.id, event.homeTeam, event.awayTeam);
+    // 3. Props de jugadores (costo según markets)
+    let playerProps: PlayerPropsData = { homeTeam, awayTeam, props: [], byPlayer: {} };
+    if (options?.propMarkets?.length) {
+      playerProps = await this.getPlayerProps(
+        sportKey,
+        event.id,
+        event.homeTeam,
+        event.awayTeam,
+        options.propMarkets,
+        options.propLabels ?? {},
+      );
+    }
 
-    // 4. Forma reciente — últimos 3 días (costo: 2)
-    const recentScores = await this.getRecentScores(sportKey);
+    // 4. Forma reciente (costo fijo de 2 por llamada)
+    const scoreDaysFrom = options?.scoreDaysFrom ?? 3;
+    const recentScores = await this.getRecentScores(sportKey, scoreDaysFrom);
+
+    // Estimar costo: 1 por team odds (sin importar cuántos markets) + 1 por props + 2 por scores
+    const propsCost = options?.propMarkets?.length ? 1 : 0;
+    const estimatedCost = 1 + propsCost + 2;
 
     return {
       eventId: event.id,
@@ -274,13 +248,13 @@ export class OddsApiService {
       apiUsage: {
         remaining: this.lastUsage.remaining,
         used: this.lastUsage.used,
-        estimatedCostThisCall: 10,
+        estimatedCostThisCall: estimatedCost,
       },
     };
   }
 
   // ─────────────────────────────────────────────
-  // PASO 1 — Buscar el evento (gratis)
+  // PASO 1 — Buscar evento por fecha (gratis)
   // ─────────────────────────────────────────────
 
   async findEvent(
@@ -307,7 +281,7 @@ export class OddsApiService {
       (e) =>
         this.nameMatch(e.home_team, homeTeam) ||
         this.nameMatch(e.away_team, awayTeam) ||
-        this.nameMatch(e.home_team, awayTeam) ||  // por si vienen invertidos
+        this.nameMatch(e.home_team, awayTeam) ||
         this.nameMatch(e.away_team, homeTeam),
     );
 
@@ -324,7 +298,8 @@ export class OddsApiService {
   }
 
   // ─────────────────────────────────────────────
-  // PASO 2 — Cuotas de equipo ML + spread + total
+  // PASO 2 — Cuotas de equipo (ML, spread, total)
+  // Markets y regions los decide el sport service
   // ─────────────────────────────────────────────
 
   async getTeamMarketOdds(
@@ -332,11 +307,13 @@ export class OddsApiService {
     eventId: string,
     homeTeam: string,
     awayTeam: string,
+    markets: string[] = ['h2h', 'spreads', 'totals'],
+    regions: string[] = ['us'],
   ): Promise<TeamMarketOdds> {
     const params = new URLSearchParams({
       apiKey: this.apiKey,
-      regions: 'us',                         // DraftKings, FanDuel, BetMGM, Caesars — suficiente
-      markets: 'h2h,spreads,totals',
+      regions: regions.join(','),
+      markets: markets.join(','),
       oddsFormat: 'american',
       eventIds: eventId,
     });
@@ -352,100 +329,108 @@ export class OddsApiService {
       return this.emptyTeamOdds(homeTeam, awayTeam);
     }
 
-    return this.parseTeamOdds(event, homeTeam, awayTeam);
+    return this.parseTeamOdds(event, homeTeam, awayTeam, markets);
   }
 
-  private parseTeamOdds(event: RawEvent, homeTeam: string, awayTeam: string): TeamMarketOdds {
+  private parseTeamOdds(event: RawEvent, homeTeam: string, awayTeam: string, requestedMarkets: string[]): TeamMarketOdds {
     const bookmakers = event.bookmakers ?? [];
 
-    // ── Moneyline ──
+    // ── Moneyline (2-way o 3-way según el sport) ──
     const homeML: BookmakerOdds[] = [];
     const awayML: BookmakerOdds[] = [];
+    const drawML: BookmakerOdds[] = [];
 
     for (const bk of bookmakers) {
       const h2h = bk.markets.find((m) => m.key === 'h2h');
       if (!h2h) continue;
+
       const homeOut = h2h.outcomes.find((o) => this.nameMatch(o.name, event.home_team));
       const awayOut = h2h.outcomes.find((o) => this.nameMatch(o.name, event.away_team));
+      const drawOut = h2h.outcomes.find((o) => this.nameMatch(o.name, 'draw'));
+
       if (homeOut) homeML.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: homeOut.price });
       if (awayOut) awayML.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: awayOut.price });
+      if (drawOut) drawML.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: drawOut.price });
     }
 
     const homeMLPrices = homeML.map((o) => o.price);
     const awayMLPrices = awayML.map((o) => o.price);
-
     const avgHomeML = averagePrice(homeML);
     const avgAwayML = averagePrice(awayML);
+    const avgDrawML = drawML.length > 0 ? averagePrice(drawML) : undefined;
 
-    // ── Spread ──
+    // ── Spread (opcional) ──
     let spreadResult: TeamMarketOdds['spread'] = null;
-    const homeSpreadOdds: BookmakerOdds[] = [];
-    const awaySpreadOdds: BookmakerOdds[] = [];
-    const spreadLines: number[] = [];
+    if (requestedMarkets.includes('spreads')) {
+      const homeSpreadOdds: BookmakerOdds[] = [];
+      const awaySpreadOdds: BookmakerOdds[] = [];
+      const spreadLines: number[] = [];
 
-    for (const bk of bookmakers) {
-      const spreadMkt = bk.markets.find((m) => m.key === 'spreads');
-      if (!spreadMkt) continue;
-      const homeOut = spreadMkt.outcomes.find((o) => this.nameMatch(o.name, event.home_team));
-      const awayOut = spreadMkt.outcomes.find((o) => this.nameMatch(o.name, event.away_team));
-      if (homeOut) {
-        homeSpreadOdds.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: homeOut.price });
-        if (homeOut.point !== undefined) spreadLines.push(homeOut.point);
+      for (const bk of bookmakers) {
+        const spreadMkt = bk.markets.find((m) => m.key === 'spreads');
+        if (!spreadMkt) continue;
+        const homeOut = spreadMkt.outcomes.find((o) => this.nameMatch(o.name, event.home_team));
+        const awayOut = spreadMkt.outcomes.find((o) => this.nameMatch(o.name, event.away_team));
+        if (homeOut) {
+          homeSpreadOdds.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: homeOut.price });
+          if (homeOut.point !== undefined) spreadLines.push(homeOut.point);
+        }
+        if (awayOut) {
+          awaySpreadOdds.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: awayOut.price });
+        }
       }
-      if (awayOut) {
-        awaySpreadOdds.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: awayOut.price });
+
+      if (homeSpreadOdds.length) {
+        const consensusLine = this.mode(spreadLines) ?? spreadLines[0] ?? 0;
+        spreadResult = {
+          line: consensusLine,
+          home: homeSpreadOdds,
+          away: awaySpreadOdds,
+          consensus: {
+            homePrice: averagePrice(homeSpreadOdds),
+            awayPrice: averagePrice(awaySpreadOdds),
+          },
+        };
       }
     }
 
-    if (homeSpreadOdds.length) {
-      // Línea más frecuente (moda)
-      const consensusLine = this.mode(spreadLines) ?? spreadLines[0] ?? 0;
-      spreadResult = {
-        line: consensusLine,
-        home: homeSpreadOdds,
-        away: awaySpreadOdds,
-        consensus: {
-          homePrice: averagePrice(homeSpreadOdds),
-          awayPrice: averagePrice(awaySpreadOdds),
-        },
-      };
-    }
-
-    // ── Total ──
+    // ── Total (opcional) ──
     let totalResult: TeamMarketOdds['total'] = null;
-    const overOdds: BookmakerOdds[] = [];
-    const underOdds: BookmakerOdds[] = [];
-    const totalLines: number[] = [];
+    if (requestedMarkets.includes('totals')) {
+      const overOdds: BookmakerOdds[] = [];
+      const underOdds: BookmakerOdds[] = [];
+      const totalLines: number[] = [];
 
-    for (const bk of bookmakers) {
-      const totalMkt = bk.markets.find((m) => m.key === 'totals');
-      if (!totalMkt) continue;
-      const overOut = totalMkt.outcomes.find((o) => o.name === 'Over');
-      const underOut = totalMkt.outcomes.find((o) => o.name === 'Under');
-      if (overOut) {
-        overOdds.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: overOut.price });
-        if (overOut.point !== undefined) totalLines.push(overOut.point);
+      for (const bk of bookmakers) {
+        const totalMkt = bk.markets.find((m) => m.key === 'totals');
+        if (!totalMkt) continue;
+        const overOut = totalMkt.outcomes.find((o) => o.name === 'Over');
+        const underOut = totalMkt.outcomes.find((o) => o.name === 'Under');
+        if (overOut) {
+          overOdds.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: overOut.price });
+          if (overOut.point !== undefined) totalLines.push(overOut.point);
+        }
+        if (underOut) {
+          underOdds.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: underOut.price });
+        }
       }
-      if (underOut) {
-        underOdds.push({ bookmaker: bk.key, bookmakerTitle: bk.title, price: underOut.price });
-      }
-    }
 
-    if (overOdds.length) {
-      const consensusLine = this.mode(totalLines) ?? totalLines[0] ?? 0;
-      totalResult = {
-        line: consensusLine,
-        over: overOdds,
-        under: underOdds,
-        consensus: {
-          overPrice: averagePrice(overOdds),
-          underPrice: averagePrice(underOdds),
-        },
-        range: {
-          min: Math.min(...totalLines),
-          max: Math.max(...totalLines),
-        },
-      };
+      if (overOdds.length) {
+        const consensusLine = this.mode(totalLines) ?? totalLines[0] ?? 0;
+        totalResult = {
+          line: consensusLine,
+          over: overOdds,
+          under: underOdds,
+          consensus: {
+            overPrice: averagePrice(overOdds),
+            underPrice: averagePrice(underOdds),
+          },
+          range: {
+            min: Math.min(...totalLines),
+            max: Math.max(...totalLines),
+          },
+        };
+      }
     }
 
     return {
@@ -454,13 +439,19 @@ export class OddsApiService {
       moneyline: {
         home: homeML,
         away: awayML,
-        consensus: { home: avgHomeML, away: avgAwayML },
+        draw: drawML.length > 0 ? drawML : undefined,
+        consensus: {
+          home: avgHomeML,
+          away: avgAwayML,
+          draw: avgDrawML,
+        },
         range: {
           min: Math.min(...homeMLPrices, ...awayMLPrices),
           max: Math.max(...homeMLPrices, ...awayMLPrices),
         },
         impliedProbHome: impliedProbability(avgHomeML),
         impliedProbAway: impliedProbability(avgAwayML),
+        impliedProbDraw: avgDrawML !== undefined ? impliedProbability(avgDrawML) : undefined,
       },
       spread: spreadResult,
       total: totalResult,
@@ -468,7 +459,7 @@ export class OddsApiService {
   }
 
   // ─────────────────────────────────────────────
-  // PASO 3 — Props de jugadores
+  // PASO 3 — Props de jugadores (markets y labels los define el sport service)
   // ─────────────────────────────────────────────
 
   async getPlayerProps(
@@ -476,11 +467,13 @@ export class OddsApiService {
     eventId: string,
     homeTeam: string,
     awayTeam: string,
+    propMarkets: string[],
+    propLabels: Record<string, string>,
   ): Promise<PlayerPropsData> {
     const params = new URLSearchParams({
       apiKey: this.apiKey,
       regions: 'us',
-      markets: PLAYER_PROP_MARKETS.join(','),
+      markets: propMarkets.join(','),
       oddsFormat: 'american',
     });
 
@@ -494,9 +487,8 @@ export class OddsApiService {
       return { homeTeam, awayTeam, props: [], byPlayer: {} };
     }
 
-    const props = this.parsePlayerProps(event);
+    const props = this.parsePlayerProps(event, propMarkets, propLabels);
 
-    // Agrupar por jugador
     const byPlayer: Record<string, PlayerPropLine[]> = {};
     for (const prop of props) {
       if (!byPlayer[prop.player]) byPlayer[prop.player] = [];
@@ -506,15 +498,17 @@ export class OddsApiService {
     return { homeTeam: event.home_team, awayTeam: event.away_team, props, byPlayer };
   }
 
-  private parsePlayerProps(event: RawEvent): PlayerPropLine[] {
+  private parsePlayerProps(
+    event: RawEvent,
+    propMarkets: string[],
+    propLabels: Record<string, string>,
+  ): PlayerPropLine[] {
     const result: PlayerPropLine[] = [];
 
-    // Para cada bookmaker y cada mercado de prop
     for (const bk of event.bookmakers ?? []) {
       for (const market of bk.markets) {
-        if (!PLAYER_PROP_MARKETS.includes(market.key)) continue;
+        if (!propMarkets.includes(market.key)) continue;
 
-        // Agrupar outcomes por jugador (description = nombre jugador)
         const byPlayer: Record<string, { over?: RawOutcome; under?: RawOutcome }> = {};
 
         for (const outcome of market.outcomes) {
@@ -528,24 +522,19 @@ export class OddsApiService {
           if (!sides.over || !sides.under) continue;
 
           // Evitar duplicados — usar el primero que aparece por bookmaker
-          const existing = result.find(
-            (p) => p.player === player && p.market === market.key,
-          );
+          const existing = result.find((p) => p.player === player && p.market === market.key);
           if (existing) continue;
-
-          const overPrice = sides.over.price;
-          const underPrice = sides.under.price;
 
           result.push({
             player,
             market: market.key,
-            marketLabel: PLAYER_PROP_LABELS[market.key] ?? market.key,
+            marketLabel: propLabels[market.key] ?? market.key,
             line: sides.over.point ?? 0,
-            overPrice,
-            underPrice,
+            overPrice: sides.over.price,
+            underPrice: sides.under.price,
             bookmaker: bk.title,
-            impliedProbOver: impliedProbability(overPrice),
-            impliedProbUnder: impliedProbability(underPrice),
+            impliedProbOver: impliedProbability(sides.over.price),
+            impliedProbUnder: impliedProbability(sides.under.price),
           });
         }
       }
@@ -555,10 +544,13 @@ export class OddsApiService {
   }
 
   // ─────────────────────────────────────────────
-  // PASO 4 — Forma reciente (scores)
+  // PASO 4 — Forma reciente
   // ─────────────────────────────────────────────
 
-  async getRecentScores(sportKey: string, daysFrom = 3): Promise<MatchScore[]> {
+  async getRecentScores(
+    sportKey: string,
+    daysFrom: number = 3,
+  ): Promise<MatchScore[]> {
     const params = new URLSearchParams({
       apiKey: this.apiKey,
       daysFrom: daysFrom.toString(),
@@ -593,7 +585,6 @@ export class OddsApiService {
   private async fetch<T>(url: string): Promise<T> {
     const response = await globalThis.fetch(url);
 
-    // Guardar headers de uso
     this.lastUsage = {
       remaining: response.headers.get('x-requests-remaining'),
       used: response.headers.get('x-requests-used'),
@@ -601,7 +592,7 @@ export class OddsApiService {
 
     const lastCost = response.headers.get('x-requests-last');
     this.logger.debug(
-      `API usage → remaining: ${this.lastUsage.remaining} | used: ${this.lastUsage.used} | cost this call: ${lastCost}`,
+      `API usage → remaining: ${this.lastUsage.remaining} | used: ${this.lastUsage.used} | cost: ${lastCost}`,
     );
 
     if (!response.ok) {
@@ -617,13 +608,11 @@ export class OddsApiService {
   // UTILIDADES
   // ─────────────────────────────────────────────
 
-  /** Coincidencia parcial de nombres de equipo (case-insensitive) */
   private nameMatch(a: string, b: string): boolean {
     const normalize = (s: string) => s.toLowerCase().trim();
     return normalize(a).includes(normalize(b)) || normalize(b).includes(normalize(a));
   }
 
-  /** Moda de un array de números */
   private mode(arr: number[]): number | null {
     if (!arr.length) return null;
     const freq: Record<number, number> = {};
@@ -636,7 +625,8 @@ export class OddsApiService {
       homeTeam,
       awayTeam,
       moneyline: {
-        home: [], away: [],
+        home: [],
+        away: [],
         consensus: { home: 0, away: 0 },
         range: { min: 0, max: 0 },
         impliedProbHome: 0,
@@ -645,22 +635,5 @@ export class OddsApiService {
       spread: null,
       total: null,
     };
-  }
-
-  // ─────────────────────────────────────────────
-  // MÉTODO LEGACY — parseMatchOdds (compatibilidad hacia atrás)
-  // ─────────────────────────────────────────────
-
-  /** @deprecated Usar getCompleteMatchData() */
-  parseMatchOdds(
-    oddsData: RawEvent[],
-    homeTeam: string,
-    awayTeam: string,
-  ): TeamMarketOdds | null {
-    const match = oddsData.find(
-      (o) => this.nameMatch(o.home_team, homeTeam) || this.nameMatch(o.away_team, awayTeam),
-    );
-    if (!match) return null;
-    return this.parseTeamOdds(match, homeTeam, awayTeam);
   }
 }
