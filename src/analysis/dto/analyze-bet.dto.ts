@@ -3,6 +3,7 @@ import { IsString, IsOptional, IsNumber, IsEnum, Min } from 'class-validator';
 export enum SportEnum {
   BASKETBALL = 'BASKETBALL',
   FOOTBALL = 'FOOTBALL',
+  SOCCER = 'SOCCER',
   TENNIS = 'TENNIS',
   OTHER = 'OTHER',
 }

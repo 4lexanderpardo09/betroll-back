@@ -12,6 +12,7 @@ export class AnalysisService {
   private readonly espnSportMap: Record<string, { sport: string; league: string }> = {
     BASKETBALL: { sport: 'basketball', league: 'nba' },
     FOOTBALL: { sport: 'football', league: 'nfl' },
+    SOCCER: { sport: 'soccer', league: 'eng.1' },
     TENNIS: { sport: 'tennis', league: 'atp' },
     OTHER: { sport: 'basketball', league: 'nba' },
   };
@@ -96,14 +97,26 @@ export class AnalysisService {
     }
 
     if (injuriesData.status === 'fulfilled') {
-      const injuries = injuriesData.value as any[];
+      // ESPN v2 injuries are grouped by team: [{ displayName: "Team", injuries: [...] }]
+      const injuriesGroups = injuriesData.value as any[];
+      
+      // Flatten all injuries
+      const allInjuries: any[] = [];
+      for (const group of injuriesGroups || []) {
+        const teamInjuries = group.injuries || [];
+        for (const inj of teamInjuries) {
+          inj.teamDisplayName = group.displayName;
+          allInjuries.push(inj);
+        }
+      }
+      
       matchData.injuries = {
-        home: injuries?.filter(
-          (inj: any) => inj.player?.team?.displayName?.includes(homeTeam.split(' ')[0]),
-        ) || [],
-        away: injuries?.filter(
-          (inj: any) => inj.player?.team?.displayName?.includes(awayTeam.split(' ')[0]),
-        ) || [],
+        home: allInjuries.filter(
+          (inj: any) => inj.teamDisplayName?.includes(homeTeam.split(' ')[0]),
+        ),
+        away: allInjuries.filter(
+          (inj: any) => inj.teamDisplayName?.includes(awayTeam.split(' ')[0]),
+        ),
       };
     }
 

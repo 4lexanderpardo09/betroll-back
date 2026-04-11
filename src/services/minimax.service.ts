@@ -12,7 +12,8 @@ interface MiniMaxResponse {
   choices: {
     index: number;
     finish_reason: string;
-    messages: MiniMaxMessage[];
+    message: MiniMaxMessage;
+    reasoning_content?: string;
   }[];
   usage?: {
     prompt_tokens: number;
@@ -92,9 +93,18 @@ export class MiniMaxService {
     }
 
     const choice = data.choices[0];
-
+    
+    // Get content from message or reasoning_content (MiniMax puts reasoning in separate field)
+    const message = choice.message;
+    let content = message?.content || '';
+    
+    // If content is empty, check reasoning_content
+    if (!content && choice.reasoning_content) {
+      content = choice.reasoning_content;
+    }
+    
     return {
-      content: choice.messages[choice.messages.length - 1]?.content || '',
+      content,
       usage: data.usage
         ? {
             promptTokens: data.usage.prompt_tokens,
@@ -213,10 +223,9 @@ export class MiniMaxService {
       maximumFractionDigits: 0,
     }).format(userBankroll);
 
-    let prompt = `Actúa como un analista cuantitativo especializado en NBA con acceso a estadísticas avanzadas, modelos probabilísticos y análisis de mercado profesional.
+    let prompt = `Actúa como un analista deportivo especializado en NBA con acceso a estadísticas avanzadas, modelos probabilísticos y análisis de rendimiento profesional.
 
-Tu objetivo es encontrar VALUE BETS reales con ventaja matemática sobre las casas.
-Busca información actualizada en internet ANTES de responder. Usa fuentes como Basketball-Reference, NBA.com/stats, ESPN, Rotowire y The Athletic.
+Objetivo: Proporcionar un análisis deportivo completo y objetivo del partido, evaluando el rendimiento esperado de cada equipo.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DATOS DEL PARTIDO
@@ -302,40 +311,34 @@ ${matchData.h2h.slice(0, 5).join('\n')}
     // Add analysis instructions
     prompt += `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 TAREA: GENERA ANÁLISIS COMPLETO
+🎯 TAREA: GENERA ANÁLISIS DEPORTIVO COMPLETO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Genera un análisis completo con las siguientes secciones:
+Genera un análisis deportivo completo y profesional con las siguientes secciones:
 
-1️⃣ FORMA RECIENTE
-2️⃣ ESTADÍSTICAS AVANZADAS DEL EQUIPO
-3️⃣ EFICIENCIA OFENSIVA DETALLADA
-4️⃣ ESTADÍSTICAS DEFENSIVAS
-5️⃣ ANÁLISIS DE JUGADORES CLAVE — ${matchData.homeTeam.toUpperCase()}
-6️⃣ ANÁLISIS DE JUGADORES CLAVE — ${matchData.awayTeam.toUpperCase()}
-7️⃣ MATCHUPS INDIVIDUALES CRÍTICOS
-8️⃣ REBOTES Y POSESIONES EXTRA
-9️⃣ PROPS DE JUGADORES — LÍNEAS DEL MERCADO
-🔟 ENFRENTAMIENTOS DIRECTOS H2H
-1️⃣1️⃣ LOCALÍA Y VISITA
-1️⃣2️⃣ FATIGA Y CALENDARIO
-1️⃣3️⃣ LESIONES Y ROTACIONES
-1️⃣4️⃣ ESTILO DE JUEGO Y MATCHUP TÁCTICO
-1️⃣5️⃣ ANÁLISIS DE CUOTAS DE MERCADO
-1️⃣6️⃣ MOVIMIENTO DE MERCADO
-1️⃣7️⃣ MODELO DE PROBABILIDAD REAL
-1️⃣8️⃣ DETECTAR VALUE BETS
-1️⃣9️⃣ PREDICCIÓN FINAL
-2️⃣0️⃣ TOP APUESTAS CON VALOR
-2️⃣1️⃣ GESTIÓN DE BANKROLL
-2️⃣2️⃣ RESUMEN EJECUTIVO FINAL
+1️⃣ FORMA RECIENTE — Últimos partidos y tendencias
+2️⃣ ESTADÍSTICAS AVANZADAS DEL EQUIPO — PPG, FG%, eficiencia
+3️⃣ EFICIENCIA OFENSIVA — Puntos por posesión, rating ofensivo
+4️⃣ ESTADÍSTICAS DEFENSIVAS — Puntos permitidos, rating defensivo
+5️⃣ JUGADORES CLAVE — ${matchData.homeTeam.toUpperCase()}
+6️⃣ JUGADORES CLAVE — ${matchData.awayTeam.toUpperCase()}
+7️⃣ MATCHUPS CRÍTICOS — Ventajas individuales
+8️⃣ REBOTES Y POSESIONES — Control del tablero
+9️⃣ TENDENCIAS DE APUESTAS — Lines movement y mercado
+🔟 HISTORIAL H2H — Encuentros recientes
+1️⃣1️⃣ FACTOR LOCALÍA — Rendimiento en casa vs fuera
+1️⃣2️⃣ FATIGA Y CALENDARIO — Descanso entre partidos
+1️⃣3️⃣ LESIONES Y ROTACIONES — Impacto en el roster
+1️⃣4️⃣ ESTILO DE JUEGO — Pace, matchup táctico
+1️⃣5️⃣ PROBABILIDAD IMPLÍCITA — Análisis de las cuotas
+1️⃣6️⃣ PREDICCIÓN DE RESULTADO — Score esperado
+1️⃣7️⃣ RESUMEN EJECUTIVO — Conclusión del análisis
 
 IMPORTANTE:
-- Usa los datos proporcionados arriba
+- Analiza los datos proporcionados y da tu mejor evaluación deportiva
 - Si falta información, indica "Datos no disponibles"
-- Calcula el VALUE de cada apuesta
-- Sugiere stake basado en el bankroll de ${formattedBankroll}
-- Formato de stake: categoría A (5%), B (3%), C (1.5%), Props (0.5%)
+- Sé específico con números y estadísticas
+- Da una predicción clara de resultado y margen
 
 `;
 
@@ -360,10 +363,10 @@ IMPORTANTE:
 
     return injuries
       .map((inj) => {
-        const player = inj.player?.fullName || 'Desconocido';
-        const detail = inj.shortDetail || inj.type?.description || 'N/A';
-        const returnDate = inj.returnDate || 'N/A';
-        return `- ${player}: ${detail} (Return: ${returnDate})`;
+        const player = inj.athlete?.displayName || inj.player?.fullName || 'Desconocido';
+        const detail = inj.shortComment || inj.shortDetail || inj.type?.description || 'N/A';
+        const status = inj.status || 'N/A';
+        return `- ${player} (${status}): ${detail}`;
       })
       .join('\n');
   }
