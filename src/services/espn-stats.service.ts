@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CacheService } from './cache.service';
+import { DataNormalizer, CleanPlayerStats, CleanGameEvent } from './data-normalizer.service';
 
 /**
  * ESPNStatsService
@@ -13,6 +14,7 @@ import { CacheService } from './cache.service';
 
 const ESPN_WEB = 'https://site.web.api.espn.com/apis/common/v3';
 const ESPN_SITE = 'https://site.api.espn.com/apis/site/v2';
+const ESPN_CORE = 'https://sports.core.api.espn.com/v2';
 
 // ─── TYPES ─────────────────────────────────────────────────────────────────
 
@@ -55,27 +57,32 @@ export interface ESPNAthleteSplits {
   }[];
 }
 
-export interface ESPNAthleteGameLogEvent {
-  gameId: string;
-  date: string;
-  atVs: string;
-  homeAway: 'home' | 'away';
-  opponent: { id: string; abbreviation: string };
-  result: 'W' | 'L';
-  stats: string[];
-}
-
 export interface ESPNAthleteGameLog {
   athlete: { id: string; displayName: string };
+  filters?: string[];
+  labels?: string[];
+  names?: string[];
+  displayNames?: string[];
   seasonTypes?: {
     id: string;
     name: string;
+    events?: ESPNAthleteGameLogEvent[];
     categories?: {
       name: string;
       labels: string[];
       events: ESPNAthleteGameLogEvent[];
     }[];
   }[];
+}
+
+export interface ESPNAthleteGameLogEvent {
+  eventId: string;
+  date: string;
+  atVs: string;
+  homeAway: 'home' | 'away';
+  opponent: { id: string; abbreviation: string };
+  result: 'W' | 'L';
+  stats: string[];
 }
 
 export interface ESPNTeamLeader {
@@ -115,6 +122,17 @@ export interface ESPNTeamRoster {
   }[];
 }
 
+// New: Season stats from core API (the proper working endpoint)
+export interface ESPNAthleteSeasonStats {
+  athlete: { id: string; displayName: string; fullName: string };
+  splits: {
+    categories: {
+      name: string;
+      stats: { name: string; displayValue: string; value: number }[];
+    }[];
+  };
+}
+
 // ─── PROCESSED ──────────────────────────────────────────────────────────────
 
 export interface ProcessedAthleteStats {
@@ -122,7 +140,7 @@ export interface ProcessedAthleteStats {
   name: string;
   position: string;
   team: string;
-  PPG: string;
+  PPG: string; // display string, '-' if null
   RPG: string;
   APG: string;
   FG_PCT: string;
@@ -134,7 +152,7 @@ export interface ProcessedAthleteStats {
     home: Record<string, string>;
     away: Record<string, string>;
   };
-  recentGames: ESPNAthleteGameLogEvent[];
+  recentGames: CleanGameEvent[];
 }
 
 // ─── SERVICE ───────────────────────────────────────────────────────────────
@@ -211,65 +229,97 @@ export class ESPNStatsService {
     return this.safe<ESPNTeamRoster>(url, CacheService.TTL.ROSTER, cacheKey);
   }
 
-  // ─── COMBINED ATHLETE STATS ─────────────────────────────────────────────
+  // ─── ATHLETE SEASON STATS (core API) ──────────────────────────────────
 
   /**
-   *获取一个球员的完整统计数据（overview + splits + recent games）
+   *获取球员赛季统计数据
+   * URL: /v2/sports/basketball/leagues/nba/seasons/2026/types/2/athletes/{id}/statistics/0
+   */
+  async getAthleteSeasonStatsCore(athleteId: string, season = 2026): Promise<ESPNAthleteSeasonStats | null> {
+    const cacheKey = CacheService.buildKey('espn', 'athlete-season-stats', athleteId, String(season));
+    const url = `${ESPN_CORE}/sports/basketball/leagues/nba/seasons/${season}/types/2/athletes/${athleteId}/statistics/0`;
+    return this.safe<ESPNAthleteSeasonStats>(url, CacheService.TTL.ATHLETE, cacheKey);
+  }
+
+  // ─── COMBINED ATHLETE STATS ─────────────────────────────────────────────
+
+  private readonly normalizer = new DataNormalizer();
+
+  /**
+   * Consigue un atleta stats completos (overview + core stats + splits + recent games)
+   * Priority: core API (always works) > overview (future games only)
    */
   async getAthleteStatsComplete(athleteId: string): Promise<ProcessedAthleteStats | null> {
-    const [overview, splits, gamelog] = await Promise.allSettled([
+    // Fetch all sources in parallel
+    const [overview, seasonStats, gamelog] = await Promise.allSettled([
       this.getAthleteOverview(athleteId),
-      this.getAthleteSplits(athleteId),
+      this.getAthleteSeasonStatsCore(athleteId),
       this.getAthleteGameLog(athleteId),
     ]);
 
     const ov = this.resolve(overview);
-    if (!ov) return null;
+    const core = this.resolve(seasonStats);
 
+    // Build statsMap from core API (always works)
+    // Fallback to overview if core doesn't have the stats we need
     const statsMap: Record<string, string> = {};
-    for (const s of ov.stats ?? []) {
-      statsMap[s.name] = s.displayValue;
-    }
 
-    // Parse splits
-    const splitsData = this.resolve(splits);
-    const homeSplits: Record<string, string> = {};
-    const awaySplits: Record<string, string> = {};
-    if (splitsData?.categories) {
-      for (const cat of splitsData.categories) {
-        if (cat.name === 'homeAway') {
-          for (const split of cat.splits ?? []) {
-            if (split.displayName === 'Home') {
-              Object.assign(homeSplits, split.stats);
-            } else if (split.displayName === 'Away') {
-              Object.assign(awaySplits, split.stats);
-            }
-          }
+    if (core?.splits?.categories) {
+      for (const cat of core.splits.categories) {
+        for (const stat of cat.stats) {
+          statsMap[stat.name] = stat.displayValue;
         }
       }
     }
 
-    // Parse recent games
-    const recentGames: ESPNAthleteGameLogEvent[] = [];
-    const gl = this.resolve(gamelog);
-    if (gl?.seasonTypes?.[0]?.categories?.[0]?.events) {
-      recentGames.push(...gl.seasonTypes[0].categories[0].events.slice(0, 5));
+    // If overview has stats not in core, merge them
+    if (ov?.stats) {
+      for (const s of ov.stats) {
+        if (!statsMap[s.name]) {
+          statsMap[s.name] = s.displayValue;
+        }
+      }
     }
+
+    this.logger.debug(`[Athlete ${athleteId}] statsMap keys: [${Object.keys(statsMap).join(', ')}]`);
+    this.logger.debug(`[Athlete ${athleteId}] statsMap PPG: ${statsMap['avgPoints'] || statsMap['pointsPerGame'] || 'N/A'}, RPG: ${statsMap['avgRebounds'] || statsMap['reboundsPerGame'] || 'N/A'}, APG: ${statsMap['avgAssists'] || statsMap['assistsPerGame'] || 'N/A'}`);
+
+    // Extract player name from overview or core
+    const playerName = ov?.athlete?.fullName
+      ?? core?.athlete?.fullName
+      ?? 'Unknown';
+    const playerPosition = ov?.athlete?.position?.abbreviation
+      ?? (ov?.athlete?.position?.name ? ov.athlete.position.name.substring(0,2) : '-');
+    const playerTeam = ov?.athlete?.team?.name ?? '-';
+
+    // Parse recent games
+    const recentGames: CleanGameEvent[] = [];
+    const gl = this.resolve(gamelog);
+    // Gamelog structure: seasonTypes[0].events (direct), labels at root level
+    if (gl?.seasonTypes?.[0]?.events) {
+      const events = gl.seasonTypes[0].events;
+      const labels = gl.labels ?? [];
+      recentGames.push(...this.normalizer.parseGameLogEvents(events, labels));
+    }
+    this.logger.debug(`[Athlete ${athleteId}] recentGames: ${recentGames.length}`);
+
+    // Normalizar stats con null en vez de "?"
+    const { displayStrings } = this.normalizer.parsePlayerStats(statsMap);
 
     return {
       id: athleteId,
-      name: ov.athlete.fullName,
-      position: ov.athlete.position?.abbreviation ?? '?',
-      team: ov.athlete.team?.name ?? '?',
-      PPG: statsMap['pointsPerGame'] ?? '?',
-      RPG: statsMap['reboundsPerGame'] ?? '?',
-      APG: statsMap['assistsPerGame'] ?? '?',
-      FG_PCT: statsMap['fieldGoalPct'] ?? '?',
-      THREE_PT_PCT: statsMap['threePointPct'] ?? '?',
-      FT_PCT: statsMap['freeThrowPct'] ?? '?',
-      MIN: statsMap['minutesPerGame'] ?? '?',
-      gamesPlayed: statsMap['gamesPlayed'],
-      splits: { home: homeSplits, away: awaySplits },
+      name: playerName,
+      position: playerPosition,
+      team: playerTeam,
+      PPG: displayStrings['PPG'] ?? displayStrings['avgPoints'] ?? '-',
+      RPG: displayStrings['RPG'] ?? displayStrings['avgRebounds'] ?? '-',
+      APG: displayStrings['APG'] ?? displayStrings['avgAssists'] ?? '-',
+      FG_PCT: displayStrings['FG_PCT'] ?? displayStrings['fieldGoalPct'] ?? '-',
+      THREE_PT_PCT: displayStrings['THREE_PT_PCT'] ?? displayStrings['threePointPct'] ?? '-',
+      FT_PCT: displayStrings['FT_PCT'] ?? displayStrings['freeThrowPct'] ?? '-',
+      MIN: displayStrings['MIN'] ?? displayStrings['avgMinutes'] ?? '-',
+      gamesPlayed: displayStrings['gamesPlayed'] ?? statsMap['gamesPlayed'] ?? undefined,
+      splits: { home: {}, away: {} },
       recentGames,
     };
   }

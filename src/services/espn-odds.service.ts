@@ -44,6 +44,18 @@ export interface ESBNOdds {
   spread: number;
   homeTeamOdds: ESPNTeamOdds;
   awayTeamOdds: ESPNTeamOdds;
+  moneyline?: {
+    home?: { close?: { odds?: string }; open?: { odds?: string } };
+    away?: { close?: { odds?: string }; open?: { odds?: string } };
+  };
+  pointSpread?: {
+    home?: { close?: { line?: string; odds?: string }; open?: { line?: string; odds?: string } };
+    away?: { close?: { line?: string; odds?: string }; open?: { line?: string; odds?: string } };
+  };
+  total?: {
+    over?: { close?: { line?: string; odds?: string }; open?: { line?: string; odds?: string } };
+    under?: { close?: { line?: string; odds?: string }; open?: { line?: string; odds?: string } };
+  };
 }
 
 export interface ESPNCompetitorStats {
@@ -179,6 +191,38 @@ export interface NbaMatchOdds {
   awayRecord: string;
   homeLeaders: ESPNCompetitorLeader[];
   awayLeaders: ESPNCompetitorLeader[];
+  /** Boxscore stats for the game (only for past/final games) */
+  gameBoxscore?: {
+    home: NbaGameBoxscoreTeam;
+    away: NbaGameBoxscoreTeam;
+  };
+}
+
+export interface NbaGameBoxscoreTeam {
+  abbreviation: string;
+  points: number;
+  stats: Record<string, string>;
+  players: NbaGameBoxscorePlayer[];
+}
+
+export interface NbaGameBoxscorePlayer {
+  id: string;
+  name: string;
+  position: string;
+  min: string;
+  pts: number;
+  fg: string;
+  threePt: string;
+  ft: string;
+  reb: number;
+  ast: number;
+  to: number;
+  stl: number;
+  blk: number;
+  oreb: number;
+  dreb: number;
+  pf: number;
+  plusMinus: number;
 }
 
 export interface NbaMatchFound {
@@ -222,6 +266,15 @@ export class ESPNOddsService {
   }
 
   // ─── SCOREBOARD ──────────────────────────────────────────────────────────
+
+  /**
+   * Obtiene un evento específico del scoreboard por eventId y fecha.
+   * Útil para obtener venue, teamStats y odds sin llamar a /summary.
+   */
+  async getScoreboardEvent(eventId: string, date: string): Promise<ESPNEvent | null> {
+    const sb = await this.getScoreboard(date);
+    return sb?.events.find(e => e.id === eventId) ?? null;
+  }
 
   /**
    * Obtiene todos los partidos NBA de un día específico.
@@ -289,11 +342,11 @@ export class ESPNOddsService {
 
   /**
    * Obtiene cuotas y stats de un partido específico.
+   * Combina datos del scoreboard (venue, teamStats, odds) + summary (boxscore).
    */
-  async getMatchOdds(eventId: string, homeTeamId?: string, awayTeamId?: string): Promise<NbaMatchOdds | null> {
+  async getMatchOdds(eventId: string, _homeTeamId?: string, _awayTeamId?: string): Promise<NbaMatchOdds | null> {
     const cacheKey = CacheService.buildKey('espn', 'match-odds', eventId);
     const url = `${ESPN_SITE}/sports/basketball/nba/summary?event=${eventId}`;
-
     const data = await this.safe<ESBNSummaryResponse>(url, CacheService.TTL.ODDS_PRE_MATCH, cacheKey);
     if (!data?.header?.competitions?.[0]) return null;
 
@@ -302,22 +355,123 @@ export class ESPNOddsService {
     const away = comp.competitors!.find((c) => c.homeAway === 'away');
     if (!home || !away) return null;
 
-    const odds = comp.odds?.[0];
-    const homeOdds = odds?.homeTeamOdds;
-    const awayOdds = odds?.awayTeamOdds;
+    // Extraer fecha del header (UTC)
+    const dateStr = comp.date;
+    const dateFormatted = new Date(dateStr).toISOString().split('T')[0].replace(/-/g, '');
 
-    // Get leaders from scoreboard if team IDs provided
-    let homeLeaders: ESPNCompetitorLeader[] = [];
-    let awayLeaders: ESPNCompetitorLeader[] = [];
-    if (homeTeamId && awayTeamId) {
-      const date = new Date(comp.date).toISOString().split('T')[0].replace(/-/g, '');
-      const sb = await this.getScoreboard(date);
-      const event = sb?.events.find(e => e.id === eventId);
-      if (event) {
-        const sbHome = event.competitions?.[0]?.competitors?.find(c => c.homeAway === 'home');
-        const sbAway = event.competitions?.[0]?.competitors?.find(c => c.homeAway === 'away');
-        homeLeaders = sbHome?.leaders ?? [];
-        awayLeaders = sbAway?.leaders ?? [];
+    // Obtener evento completo del scoreboard (tiene venue, odds reales, teamStats)
+    // El scoreboard usa fecha US Eastern, no UTC
+    // Primero intentamos con la fecha UTC, si no encuentraintentamos con -1 día
+    let scoreboardEvent = await this.getScoreboardEvent(eventId, dateFormatted);
+    if (!scoreboardEvent) {
+      // El evento puede estar indexado en la fecha US anterior (partidos de noche US)
+      const usDate = new Date(comp.date);
+      usDate.setDate(usDate.getDate() - 1);
+      const fallbackDate = usDate.toISOString().split('T')[0].replace(/-/g, '');
+      scoreboardEvent = await this.getScoreboardEvent(eventId, fallbackDate);
+    }
+    const sbComp = scoreboardEvent?.competitions?.[0];
+
+    // Odds del scoreboard (provider ESPN BET)
+    const sbOdds = sbComp?.odds?.[0];
+
+    // Venue del scoreboard
+    const sbVenue = sbComp?.venue;
+
+    // TeamStats del scoreboard (estadísticas de temporada)
+    const sbHome = sbComp?.competitors?.find(c => c.homeAway === 'home');
+    const sbAway = sbComp?.competitors?.find(c => c.homeAway === 'away');
+
+    // Leaders del scoreboard
+    const homeLeaders = sbHome?.leaders ?? home.leaders ?? [];
+    const awayLeaders = sbAway?.leaders ?? away.leaders ?? [];
+
+    // Boxscore (solo para partidos pasados/finalizados)
+    // API returns "boxscore" (lowercase s), not "boxScore"
+    let gameBoxscore: NbaMatchOdds['gameBoxscore'];
+    if (data.boxscore?.teams?.length) {
+      const homeTeamIdStr = home.team.id;
+      const awayTeamIdStr = away.team.id;
+
+      this.logger.debug(`boxScore: looking for homeTeamId=${homeTeamIdStr} awayTeamId=${awayTeamIdStr}`);
+      this.logger.debug(`boxScore teams: ${data.boxscore.teams.map((t: any) => `${t.team.id}(${t.team.abbreviation})`).join(', ')}`);
+
+      const homeBoxTeam = data.boxscore.teams.find((t: any) => t.team.id === homeTeamIdStr);
+      const awayBoxTeam = data.boxscore.teams.find((t: any) => t.team.id === awayTeamIdStr);
+
+      const buildBoxTeamStats = (team: ESPNBoxscoreTeam): Record<string, string> => {
+        const stats: Record<string, string> = {};
+        for (const s of team.statistics) {
+          stats[s.name] = s.displayValue;
+        }
+        return stats;
+      };
+
+      const parsePlayersFromGroup = (playerGroup: ESPNBoxscorePlayer): NbaGameBoxscorePlayer[] => {
+        const result: NbaGameBoxscorePlayer[] = [];
+        const statInfo = playerGroup.statistics?.[0];
+        if (!statInfo) return result;
+        const labels = statInfo.labels ?? [];
+        const athletes = statInfo.athletes ?? [];
+        for (const athlete of athletes) {
+          if (athlete.didNotPlay) continue;
+          const stats: Record<string, string> = {};
+          labels.forEach((label: string, i: number) => { stats[label] = athlete.stats[i] ?? '0'; });
+          result.push({
+            id: athlete.athlete.id,
+            name: athlete.athlete.displayName,
+            position: athlete.athlete.position?.abbreviation ?? '-',
+            min: stats['MIN'] ?? '0',
+            pts: parseInt(stats['PTS'] ?? '0', 10),
+            fg: stats['FG'] ?? '0-0',
+            threePt: stats['3PT'] ?? '0-0',
+            ft: stats['FT'] ?? '0-0',
+            reb: parseInt(stats['REB'] ?? '0', 10),
+            ast: parseInt(stats['AST'] ?? '0', 10),
+            to: parseInt(stats['TO'] ?? '0', 10),
+            stl: parseInt(stats['STL'] ?? '0', 10),
+            blk: parseInt(stats['BLK'] ?? '0', 10),
+            oreb: parseInt(stats['OREB'] ?? '0', 10),
+            dreb: parseInt(stats['DREB'] ?? '0', 10),
+            pf: parseInt(stats['PF'] ?? '0', 10),
+            plusMinus: parseInt(stats['+/-'] ?? '0', 10),
+          });
+        }
+        return result;
+      };
+
+      const homePlayers: NbaGameBoxscorePlayer[] = [];
+      const awayPlayers: NbaGameBoxscorePlayer[] = [];
+
+      if (data.boxscore.players) {
+        for (const playerGroup of data.boxscore.players) {
+          const teamId = playerGroup.team.id;
+          const parsed = parsePlayersFromGroup(playerGroup);
+          if (teamId === homeTeamIdStr) homePlayers.push(...parsed);
+          else if (teamId === awayTeamIdStr) awayPlayers.push(...parsed);
+        }
+      }
+
+      const homePts = home.score ?? '0';
+      const awayPts = away.score ?? '0';
+
+      if (homeBoxTeam || awayBoxTeam) {
+        gameBoxscore = {
+          home: {
+            abbreviation: homeBoxTeam?.team.abbreviation ?? home.team.abbreviation,
+            points: parseInt(homePts, 10),
+            stats: homeBoxTeam ? buildBoxTeamStats(homeBoxTeam) : {},
+            players: homePlayers.sort((a, b) => b.pts - a.pts),
+          },
+          away: {
+            abbreviation: awayBoxTeam?.team.abbreviation ?? away.team.abbreviation,
+            points: parseInt(awayPts, 10),
+            stats: awayBoxTeam ? buildBoxTeamStats(awayBoxTeam) : {},
+            players: awayPlayers.sort((a, b) => b.pts - a.pts),
+          },
+        };
+        this.logger.log(`boxScore extracted: ${gameBoxscore.home.abbreviation} ${gameBoxscore.home.points}-${gameBoxscore.away.points} ${gameBoxscore.away.abbreviation}`);
+        this.logger.log(`Home players: ${gameBoxscore.home.players.length}, Away players: ${gameBoxscore.away.players.length}`);
       }
     }
 
@@ -327,37 +481,36 @@ export class ESPNOddsService {
       awayTeam: `${away.team.location} ${away.team.name}`,
       commenceTime: comp.date,
       status: this.mapStatus(data.header.competitions[0].status?.type?.state),
-      venue: data.gameInfo?.venue
-        ? { name: data.gameInfo.venue.name, city: data.gameInfo.venue.city }
-        : null,
+      venue: sbVenue ? { name: sbVenue.fullName, city: sbVenue.address?.city ?? 'Unknown' } : null,
       moneyline: {
-        home: homeOdds?.moneyLine ?? 0,
-        away: awayOdds?.moneyLine ?? 0,
-        homeImplied: homeOdds?.moneyLine ? this.impliedProb(homeOdds.moneyLine) : 0,
-        awayImplied: awayOdds?.moneyLine ? this.impliedProb(awayOdds.moneyLine) : 0,
+        home: parseInt(sbOdds?.moneyline?.home?.close?.odds ?? '0', 10),
+        away: parseInt(sbOdds?.moneyline?.away?.close?.odds ?? '0', 10),
+        homeImplied: this.impliedProb(parseInt(sbOdds?.moneyline?.home?.close?.odds ?? '0', 10)),
+        awayImplied: this.impliedProb(parseInt(sbOdds?.moneyline?.away?.close?.odds ?? '0', 10)),
       },
-      spread: odds?.spread != null
+      spread: sbOdds?.spread != null
         ? {
-            line: odds.spread,
-            homePrice: homeOdds?.spreadOdds ?? 0,
-            awayPrice: awayOdds?.spreadOdds ?? 0,
+            line: sbOdds.spread,
+            homePrice: parseInt(sbOdds?.pointSpread?.home?.close?.odds ?? '-110', 10),
+            awayPrice: parseInt(sbOdds?.pointSpread?.away?.close?.odds ?? '-110', 10),
           }
         : null,
-      total: odds?.overUnder != null
+      total: sbOdds?.overUnder != null
         ? {
-            line: odds.overUnder,
-            overPrice: homeOdds?.spreadOdds ?? -110,
-            underPrice: awayOdds?.spreadOdds ?? -110,
+            line: sbOdds.overUnder,
+            overPrice: parseInt(sbOdds?.total?.over?.close?.odds ?? '-110', 10),
+            underPrice: parseInt(sbOdds?.total?.under?.close?.odds ?? '-110', 10),
           }
         : null,
       teamStats: {
-        home: this.buildTeamStats(home),
-        away: this.buildTeamStats(away),
+        home: this.buildTeamStats(sbHome),
+        away: this.buildTeamStats(sbAway),
       },
-      homeRecord: home.records?.find((r) => r.name === 'overall')?.summary ?? '0-0',
-      awayRecord: away.records?.find((r) => r.name === 'overall')?.summary ?? '0-0',
-      homeLeaders: homeLeaders.length > 0 ? homeLeaders : (home.leaders ?? []),
-      awayLeaders: awayLeaders.length > 0 ? awayLeaders : (away.leaders ?? []),
+      homeRecord: sbHome?.records?.find((r) => r.name === 'overall')?.summary ?? '0-0',
+      awayRecord: sbAway?.records?.find((r) => r.name === 'overall')?.summary ?? '0-0',
+      homeLeaders: homeLeaders.length > 0 ? homeLeaders : (sbHome?.leaders ?? []),
+      awayLeaders: awayLeaders.length > 0 ? awayLeaders : (sbAway?.leaders ?? []),
+      gameBoxscore,
     };
   }
 
@@ -382,7 +535,8 @@ export class ESPNOddsService {
     return 'scheduled';
   }
 
-  private buildTeamStats(competitor: ESPNCompetitor): Record<string, string> {
+  private buildTeamStats(competitor?: ESPNCompetitor): Record<string, string> {
+    if (!competitor) return {};
     const stats: Record<string, string> = {};
     for (const s of competitor.statistics ?? []) {
       stats[s.name] = s.displayValue;
@@ -403,12 +557,49 @@ interface ESBNSummaryResponse {
     venue?: { name: string; city: string; address?: { city: string; state: string } };
     attendance?: number;
   };
-  boxScore?: {
-    teams?: {
-      team: { id: string; name: string; abbreviation: string };
-      statistics: { name: string; displayValue: string }[];
-    }[];
+  boxscore?: {
+    teams?: ESPNBoxscoreTeam[];
+    players?: ESPNBoxscorePlayer[];
   };
+  leaders?: {
+    category: string;
+    leaders: {
+      athlete: { id: string; displayName: string };
+      value: number;
+      rank?: number;
+    }[];
+  }[];
+}
+
+export interface ESPNBoxscoreTeam {
+  team: { id: string; abbreviation: string; name: string };
+  statistics: {
+    name: string;
+    displayValue: string;
+    value?: number;
+  }[];
+}
+
+export interface ESPNBoxscorePlayer {
+  team: { id: string; abbreviation: string };
+  statistics: {
+    names: string[];
+    keys: string[];
+    labels: string[];
+    descriptions: string[];
+    athletes: {
+      athlete: {
+        id: string;
+        displayName: string;
+        fullName: string;
+        position?: { abbreviation: string };
+      };
+      stats: string[]; // aligned with labels array
+      starter?: boolean;
+      didNotPlay?: boolean;
+    }[];
+    totals?: string[];
+  }[];
 }
 
 interface ESBNCompetitionSummary {

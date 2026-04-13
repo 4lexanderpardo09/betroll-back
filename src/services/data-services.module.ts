@@ -6,6 +6,8 @@ import { ESPNOddsService } from './espn-odds.service';
 import { ESPNStatsService } from './espn-stats.service';
 import { OddsApiService } from './odds-api.service';
 import { MiniMaxService } from './minimax.service';
+import { DataNormalizer } from './data-normalizer.service';
+import { NbaTeamStatsAggregator } from './nba-team-stats-aggregator.service';
 
 @Global()
 @Module({
@@ -17,6 +19,8 @@ import { MiniMaxService } from './minimax.service';
     ESPNStatsService,
     OddsApiService,
     MiniMaxService,
+    DataNormalizer,
+    NbaTeamStatsAggregator,
   ],
   exports: [
     CacheService,
@@ -26,6 +30,8 @@ import { MiniMaxService } from './minimax.service';
     ESPNStatsService,
     OddsApiService,
     MiniMaxService,
+    DataNormalizer,
+    NbaTeamStatsAggregator,
   ],
 })
 export class DataServicesModule {}
