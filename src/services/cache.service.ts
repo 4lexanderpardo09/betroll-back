@@ -22,6 +22,9 @@ export class CacheService {
     ODDS_LIVE: 60 * 1000, // 1 minute for live odds
     TEAM_FORM: 6 * 60 * 60 * 1000, // 6 hours for team form
     SCHEDULE: 60 * 60 * 1000, // 1 hour for schedules
+    ROSTER: 24 * 60 * 60 * 1000, // 24 hours for roster data
+    ATHLETE: 60 * 60 * 1000, // 1 hour for athlete data
+    SEARCH: 15 * 60 * 1000, // 15 minutes for search results
   };
 
   async get<T>(key: string): Promise<T | null> {

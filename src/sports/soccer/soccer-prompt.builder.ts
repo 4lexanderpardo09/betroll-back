@@ -7,11 +7,7 @@ import {
 
 export interface SoccerPromptData {
   oddsData: CompleteMatchOddsData;
-  espnData: {
-    homeTeamStats?: any;
-    awayTeamStats?: any;
-    injuries?: { home: any[]; away: any[] };
-  };
+  espnPrompt: string;
   userBankroll: number;
 }
 
@@ -21,7 +17,7 @@ export class SoccerPromptBuilder {
    * Build the Soccer analysis prompt
    */
   build(data: SoccerPromptData): string {
-    const { oddsData, espnData, userBankroll } = data;
+    const { oddsData, espnPrompt, userBankroll } = data;
     const { homeTeam, awayTeam } = oddsData;
 
     const formattedBankroll = new Intl.NumberFormat('es-CO', {
@@ -49,14 +45,9 @@ FECHA: ${new Date(oddsData.commenceTime).toLocaleDateString('es-CO')}
     // Recent form section
     prompt += this.buildRecentFormSection(oddsData.recentScores, homeTeam, awayTeam);
 
-    // ESPN stats if available
-    if (espnData.homeTeamStats || espnData.awayTeamStats) {
-      prompt += this.buildEspnStatsSection(homeTeam, awayTeam, espnData);
-    }
-
-    // Injuries section
-    if (espnData.injuries) {
-      prompt += this.buildInjuriesSection(homeTeam, awayTeam, espnData.injuries);
+    // ESPN qualitative context
+    if (espnPrompt) {
+      prompt += `\n${espnPrompt}\n`;
     }
 
     // Analysis instructions
@@ -175,60 +166,6 @@ ${awayRecent.length > 0 ? awayRecent.map(s => this.formatScore(s, awayTeam)).joi
     const date = new Date(match.commenceTime).toLocaleDateString('es-CO', { month: 'short', day: 'numeric' });
     const result = parseInt(teamScore || '0') > parseInt(opponentScore || '0') ? 'W' : parseInt(teamScore || '0') === parseInt(opponentScore || '0') ? 'D' : 'L';
     return `  [${date}] vs ${opponent}: ${teamScore}-${opponentScore} (${result})`;
-  }
-
-  private buildEspnStatsSection(homeTeam: string, awayTeam: string, espnData: SoccerPromptData['espnData']): string {
-    let section = `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 ESTADÍSTICAS ESPN
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-${homeTeam}:
-${this.formatEspnStats(espnData.homeTeamStats)}
-
-${awayTeam}:
-${this.formatEspnStats(espnData.awayTeamStats)}
-
-`;
-    return section;
-  }
-
-  private formatEspnStats(stats: any): string {
-    if (!stats) return '  Datos no disponibles';
-
-    const lines: string[] = [];
-    if (stats.record) lines.push(`Record: ${stats.record}`);
-    if (stats.form) lines.push(`Forma: ${stats.form}`);
-
-    return lines.length > 0 ? `  ${lines.join(' | ')}` : '  Datos no disponibles';
-  }
-
-  private buildInjuriesSection(homeTeam: string, awayTeam: string, injuries: { home: any[]; away: any[] }): string {
-    let section = `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏥 LESIONES Y SUSPENSIONES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-${homeTeam}:
-${this.formatInjuries(injuries.home)}
-
-${awayTeam}:
-${this.formatInjuries(injuries.away)}
-
-`;
-    return section;
-  }
-
-  private formatInjuries(injuries: any[]): string {
-    if (!injuries || injuries.length === 0) return '  Sin lesiones reportadas';
-
-    return injuries
-      .map((inj) => {
-        const player = inj.athlete?.displayName || inj.player?.fullName || inj.displayName || 'Desconocido';
-        const detail = inj.shortComment || inj.shortDetail || inj.status || 'N/A';
-        return `  - ${player}: ${detail}`;
-      })
-      .join('\n');
   }
 
   private nameMatch(a: string, b: string): boolean {

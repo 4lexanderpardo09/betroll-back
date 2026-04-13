@@ -58,23 +58,20 @@ export class SoccerAnalysisService {
 
     this.logger.log(`Odds API usage — remaining: ${oddsData.apiUsage.remaining}, used: ${oddsData.apiUsage.used}`);
 
-    // 2. Get ESPN data (soccer uses 'soccer' as sport)
-    const [scoreboardResult, injuriesResult] = await Promise.allSettled([
-      this.espnService.getScoreboardV2('soccer', league, matchDate),
-      this.espnService.getInjuriesV2('soccer', league),
-    ]);
-
-    const espnData = this.parseEspnData(
-      scoreboardResult.status === 'fulfilled' ? scoreboardResult.value : null,
-      injuriesResult.status === 'fulfilled' ? injuriesResult.value : null,
-      homeTeam,
-      awayTeam,
+    // 2. Get ESPN qualitative context
+    const espnContext = await this.espnService.getQualitativeContext(
+      'soccer',
+      league,
+      oddsData.eventId,
+      oddsData.homeTeam,
+      oddsData.awayTeam,
     );
+    const espnPrompt = this.espnService.toAIPrompt(espnContext);
 
     // 3. Build the Soccer-specific prompt
     const promptData: SoccerPromptData = {
       oddsData,
-      espnData,
+      espnPrompt,
       userBankroll,
     };
     const prompt = this.soccerPromptBuilder.build(promptData);
@@ -100,56 +97,5 @@ export class SoccerAnalysisService {
       estimatedCost,
       oddsData,
     };
-  }
-
-  private parseEspnData(
-    scoreboard: any,
-    injuries: any,
-    homeTeam: string,
-    awayTeam: string,
-  ): SoccerPromptData['espnData'] {
-    const espnData: SoccerPromptData['espnData'] = {};
-
-    if (scoreboard && Array.isArray(scoreboard)) {
-      const match = scoreboard.find(
-        (e: any) =>
-          e.name?.toLowerCase().includes(homeTeam.toLowerCase()) ||
-          e.name?.toLowerCase().includes(awayTeam.toLowerCase()),
-      );
-
-      if (match?.competitions?.[0]) {
-        const competition = match.competitions[0];
-        const homeCompetitor = competition.competitors?.find((c: any) => c.homeAway === 'home');
-        const awayCompetitor = competition.competitors?.find((c: any) => c.homeAway === 'away');
-
-        if (homeCompetitor) {
-          espnData.homeTeamStats = { record: homeCompetitor.records?.[0]?.summary };
-        }
-        if (awayCompetitor) {
-          espnData.awayTeamStats = { record: awayCompetitor.records?.[0]?.summary };
-        }
-      }
-    }
-
-    if (injuries && Array.isArray(injuries)) {
-      const homeInjuries: any[] = [];
-      const awayInjuries: any[] = [];
-
-      for (const group of injuries) {
-        const teamInjuries = group.injuries || [];
-        const isHomeTeam = group.displayName?.toLowerCase().includes(homeTeam.split(' ')[0].toLowerCase());
-        const isAwayTeam = group.displayName?.toLowerCase().includes(awayTeam.split(' ')[0].toLowerCase());
-
-        for (const inj of teamInjuries) {
-          inj.teamDisplayName = group.displayName;
-          if (isHomeTeam) homeInjuries.push(inj);
-          if (isAwayTeam) awayInjuries.push(inj);
-        }
-      }
-
-      espnData.injuries = { home: homeInjuries, away: awayInjuries };
-    }
-
-    return espnData;
   }
 }
