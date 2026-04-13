@@ -1,6 +1,6 @@
 import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
 import { OddsApiService, CompleteMatchOddsData } from '../../services/odds-api.service';
-import { ESPNService } from '../../services/espn.service';
+import { ESPNQualitativeService } from '../../services/espn-qualitative.service';
 import { MiniMaxService } from '../../services/minimax.service';
 import { SoccerPromptBuilder, SoccerPromptData } from './soccer-prompt.builder';
 
@@ -20,7 +20,7 @@ export class SoccerAnalysisService {
 
   constructor(
     private readonly oddsApiService: OddsApiService,
-    private readonly espnService: ESPNService,
+    private readonly espnQualitativeService: ESPNQualitativeService,
     private readonly minimaxService: MiniMaxService,
     private readonly soccerPromptBuilder: SoccerPromptBuilder,
   ) {}
@@ -59,14 +59,14 @@ export class SoccerAnalysisService {
     this.logger.log(`Odds API usage — remaining: ${oddsData.apiUsage.remaining}, used: ${oddsData.apiUsage.used}`);
 
     // 2. Get ESPN qualitative context
-    const espnContext = await this.espnService.getQualitativeContext(
+    const espnContext = await this.espnQualitativeService.getQualitativeContext(
       'soccer',
       league,
       oddsData.eventId,
       oddsData.homeTeam,
       oddsData.awayTeam,
     );
-    const espnPrompt = this.espnService.toAIPrompt(espnContext);
+    const espnPrompt = this.espnQualitativeService.toAIPrompt(espnContext);
 
     // 3. Build the Soccer-specific prompt
     const promptData: SoccerPromptData = {

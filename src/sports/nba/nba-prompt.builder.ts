@@ -1,14 +1,51 @@
 import { Injectable } from '@nestjs/common';
-import {
-  CompleteMatchOddsData,
-  TeamMarketOdds,
-  PlayerPropsData,
-  PlayerPropLine,
-  MatchScore,
-} from '../../services/odds-api.service';
+import { NbaMatchOdds } from '../../services/espn-odds.service';
+import { ESPNTeamLeader, ProcessedAthleteStats } from '../../services/espn-stats.service';
+
+// ─── NEW PROMPT DATA ────────────────────────────────────────────────────────
+
+export interface NbaMatchInfo {
+  eventId: string;
+  homeTeam: string;
+  awayTeam: string;
+  commenceTime: string;
+  venue: { name: string; city: string } | null;
+  status: 'scheduled' | 'in_progress' | 'final';
+}
+
+export interface NbaOddsData {
+  moneyline: {
+    home: number;
+    away: number;
+    homeImplied: number;
+    awayImplied: number;
+  };
+  spread: {
+    line: number;
+    homePrice: number;
+    awayPrice: number;
+  } | null;
+  total: {
+    line: number;
+    overPrice: number;
+    underPrice: number;
+  } | null;
+}
+
+export interface NbaTeamStatsData {
+  home: Record<string, string>;
+  away: Record<string, string>;
+  homeRecord: string;
+  awayRecord: string;
+  homeLeaders: ESPNTeamLeader[];
+  awayLeaders: ESPNTeamLeader[];
+}
 
 export interface NbaPromptData {
-  oddsData: CompleteMatchOddsData;
+  match: NbaMatchInfo;
+  odds: NbaOddsData;
+  teamStats: NbaTeamStatsData;
+  athleteStats: Record<string, ProcessedAthleteStats>;
   espnPrompt: string;
   userBankroll: number;
 }
@@ -16,11 +53,11 @@ export interface NbaPromptData {
 @Injectable()
 export class NbaPromptBuilder {
   /**
-   * Build the NBA analysis prompt
+   * Build the NBA analysis prompt using ESPN data only
    */
   build(data: NbaPromptData): string {
-    const { oddsData, espnPrompt, userBankroll } = data;
-    const { homeTeam, awayTeam } = oddsData;
+    const { match, odds, teamStats, athleteStats, espnPrompt, userBankroll } = data;
+    const { homeTeam, awayTeam } = match;
 
     const formattedBankroll = new Intl.NumberFormat('es-CO', {
       style: 'currency',
@@ -37,18 +74,22 @@ DATOS DEL PARTIDO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EQUIPO LOCAL: ${homeTeam}
 EQUIPO VISITANTE: ${awayTeam}
-FECHA: ${new Date(oddsData.commenceTime).toLocaleDateString('es-CO')}
+FECHA: ${new Date(match.commenceTime).toLocaleDateString('es-CO')}
+SEDE: ${match.venue ? `${match.venue.name}, ${match.venue.city}` : 'No disponible'}
 
 `;
 
     // Team odds section
-    prompt += this.buildTeamOddsSection(oddsData.teamOdds);
+    prompt += this.buildOddsSection(match, odds);
 
-    // Player props section
-    prompt += this.buildPlayerPropsSection(oddsData.playerProps);
+    // Team stats section
+    prompt += this.buildTeamStatsSection(homeTeam, awayTeam, teamStats);
 
-    // Recent form section
-    prompt += this.buildRecentFormSection(oddsData.recentScores, homeTeam, awayTeam);
+    // Key players section
+    prompt += this.buildKeyPlayersSection(teamStats, athleteStats);
+
+    // Recent form (from recent results in espnPrompt)
+    prompt += this.buildRecentFormSection(espnPrompt);
 
     // ESPN qualitative context
     if (espnPrompt) {
@@ -93,143 +134,124 @@ IMPORTANTE:
     return prompt;
   }
 
-  private buildTeamOddsSection(teamOdds: TeamMarketOdds): string {
-    const { moneyline, spread, total, homeTeam, awayTeam } = teamOdds;
+  // ─── SECTIONS ───────────────────────────────────────────────────────────
+
+  private buildOddsSection(match: NbaMatchInfo, odds: NbaOddsData): string {
+    const { homeTeam, awayTeam } = match;
+    const { moneyline, spread, total } = odds;
+
+    const formatAmerican = (val: number) => (val > 0 ? `+${val}` : `${val}`);
+    const formatImplied = (val: number) => `${(val * 100).toFixed(1)}%`;
 
     let section = `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💰 CUOTAS DEL MERCADO (Consenso)
+💰 CUOTAS (ESPN BET)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 MONEYLINE:
-  ${homeTeam}: ${moneyline.consensus.home > 0 ? '+' : ''}${moneyline.consensus.home} (implied: ${(moneyline.impliedProbHome * 100).toFixed(1)}%)
-  ${awayTeam}: ${moneyline.consensus.away > 0 ? '+' : ''}${moneyline.consensus.away} (implied: ${(moneyline.impliedProbAway * 100).toFixed(1)}%)
+  ${homeTeam}: ${formatAmerican(moneyline.home)} (implied: ${formatImplied(moneyline.homeImplied)})
+  ${awayTeam}: ${formatAmerican(moneyline.away)} (implied: ${formatImplied(moneyline.awayImplied)})
 
 `;
 
     if (spread) {
       section += `SPREAD:
-  ${homeTeam} ${spread.line > 0 ? '+' : ''}${spread.line} @ ${spread.consensus.homePrice}
-  ${awayTeam} ${(-spread.line) > 0 ? '+' : ''}${(-spread.line)} @ ${spread.consensus.awayPrice}
+  ${homeTeam} ${spread.line > 0 ? '+' : ''}${spread.line} @ ${spread.homePrice}
+  ${awayTeam} ${-spread.line > 0 ? '+' : ''}${(-spread.line)} @ ${spread.awayPrice}
 
 `;
     }
 
     if (total) {
       section += `TOTAL (O/U):
-  ${total.line} — Over: ${total.consensus.overPrice} | Under: ${total.consensus.underPrice}
+  ${total.line} — Over: ${total.overPrice} | Under: ${total.underPrice}
 
 `;
     }
-
-    // Add bookmaker range info
-    section += `RANGO DE CUOTAS:
-  ML range: ${moneyline.range.min} a ${moneyline.range.max}
-  Bookmakers: ${moneyline.home.map(b => b.bookmakerTitle).join(', ')}
-
-`;
 
     return section;
   }
 
-  private buildPlayerPropsSection(playerProps: PlayerPropsData): string {
-    if (!playerProps.props || playerProps.props.length === 0) {
-      return `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏀 PROPS DE JUGADORES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Props no disponibles para este partido.
+  private buildTeamStatsSection(
+    homeTeam: string,
+    awayTeam: string,
+    teamStats: NbaTeamStatsData,
+  ): string {
+    const { home, away, homeRecord, awayRecord } = teamStats;
 
-`;
-    }
+    const getStat = (stats: Record<string, string>, key: string, fallback = '?') =>
+      stats[key] ?? fallback;
+
+    const homePPG = getStat(home, 'avgPoints', '?');
+    const awayPPG = getStat(away, 'avgPoints', '?');
 
     let section = `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏀 PROPS DE JUGADORES (Consenso)
+📊 ESTADÍSTICAS DE EQUIPO (Temporada)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+${homeTeam} (${homeRecord}):
+  PPG: ${homePPG} | FG%: ${getStat(home, 'fieldGoalPct')} | 3P%: ${getStat(home, 'threePointPct')}
+  Rebotes: ${getStat(home, 'avgRebounds')} | Asistencias: ${getStat(home, 'avgAssists')}
+
+${awayTeam} (${awayRecord}):
+  PPG: ${awayPPG} | FG%: ${getStat(away, 'fieldGoalPct')} | 3P%: ${getStat(away, 'threePointPct')}
+  Rebotes: ${getStat(away, 'avgRebounds')} | Asistencias: ${getStat(away, 'avgAssists')}
+
 `;
-
-    // Group by market
-    const byMarket: Record<string, PlayerPropLine[]> = {};
-    for (const prop of playerProps.props) {
-      if (!byMarket[prop.market]) byMarket[prop.market] = [];
-      byMarket[prop.market].push(prop);
-    }
-
-    // For each market, show the consensus line (average across bookmakers)
-    for (const [market, props] of Object.entries(byMarket)) {
-      const label = props[0]?.marketLabel || market;
-      section += `${label}:\n`;
-
-      // Group by player
-      const byPlayer: Record<string, PlayerPropLine[]> = {};
-      for (const p of props) {
-        if (!byPlayer[p.player]) byPlayer[p.player] = [];
-        byPlayer[p.player].push(p);
-      }
-
-      for (const [player, lines] of Object.entries(byPlayer)) {
-        const avgLine = lines.reduce((sum, p) => sum + p.line, 0) / lines.length;
-        const avgOverPrice = lines.reduce((sum, p) => sum + p.overPrice, 0) / lines.length;
-        const avgUnderPrice = lines.reduce((sum, p) => sum + p.underPrice, 0) / lines.length;
-
-        section += `  ${player}: O/U ${avgLine.toFixed(1)} | Over: ${avgOverPrice > 0 ? '+' : ''}${avgOverPrice} | Under: ${avgUnderPrice > 0 ? '+' : ''}${avgUnderPrice}\n`;
-      }
-      section += '\n';
-    }
 
     return section;
   }
 
-  private buildRecentFormSection(recentScores: MatchScore[], homeTeam: string, awayTeam: string): string {
-    if (!recentScores || recentScores.length === 0) {
-      return `
+  private buildKeyPlayersSection(
+    teamStats: NbaTeamStatsData,
+    athleteStats: Record<string, ProcessedAthleteStats>,
+  ): string {
+    const { homeLeaders, awayLeaders } = teamStats;
+
+    const buildTeam = (leaders: ESPNTeamLeader[], prefix: string): string => {
+      let result = '';
+      for (const leader of leaders) {
+        if (['pointsPerGame', 'reboundsPerGame', 'assistsPerGame'].includes(leader.name)) {
+          for (const l of leader.leaders) {
+            const stats = athleteStats[l.athlete.id];
+            const label = leader.abbreviation;
+            const value = l.displayValue;
+            if (stats) {
+              result += `  ${l.athlete.fullName}: ${label} ${value} | FG%: ${stats.FG_PCT} | MIN: ${stats.MIN}\n`;
+            } else {
+              result += `  ${l.athlete.fullName}: ${label} ${value}\n`;
+            }
+          }
+        }
+      }
+      return result || '  Sin datos disponibles\n';
+    };
+
+    return `
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏀 JUGADORES CLAVE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+LOCAL (${homeLeaders[0]?.leaders[0]?.athlete.displayName ?? '?'}):
+${buildTeam(homeLeaders, 'home')}
+
+VISITANTE:
+${buildTeam(awayLeaders, 'away')}
+
+`;
+  }
+
+  private buildRecentFormSection(espnPrompt: string): string {
+    // Extract recent form from espnPrompt if present
+    const recentFormMatch = espnPrompt.match(/Últimos \d+ partidos:([\s\S]*?)(?=---)/);
+    if (!recentFormMatch) return '';
+    return `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📈 FORMA RECIENTE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Datos no disponibles.
+${recentFormMatch[1].trim()}
 
 `;
-    }
-
-    // Find recent matches for each team (last 5)
-    const homeRecent = recentScores
-      .filter(s => s.completed && (this.nameMatch(s.homeTeam, homeTeam) || this.nameMatch(s.awayTeam, homeTeam)))
-      .slice(0, 5);
-
-    const awayRecent = recentScores
-      .filter(s => s.completed && (this.nameMatch(s.homeTeam, awayTeam) || this.nameMatch(s.awayTeam, awayTeam)))
-      .slice(0, 5);
-
-    let section = `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📈 FORMA RECIENTE (últimos partidos)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-${homeTeam}:
-${homeRecent.length > 0 ? homeRecent.map(s => this.formatScore(s, homeTeam)).join('\n') : '  Sin partidos recientes'}
-
-${awayTeam}:
-${awayRecent.length > 0 ? awayRecent.map(s => this.formatScore(s, awayTeam)).join('\n') : '  Sin partidos recientes'}
-
-`;
-
-    return section;
-  }
-
-  private formatScore(match: MatchScore, forTeam: string): string {
-    const isHome = this.nameMatch(match.homeTeam, forTeam);
-    const teamScore = isHome ? match.homeScore : match.awayScore;
-    const opponent = isHome ? match.awayTeam : match.homeTeam;
-    const opponentScore = isHome ? match.awayScore : match.homeScore;
-    const date = new Date(match.commenceTime).toLocaleDateString('es-CO', { month: 'short', day: 'numeric' });
-    const result = parseInt(teamScore || '0') > parseInt(opponentScore || '0') ? 'W' : 'L';
-    return `  [${date}] vs ${opponent}: ${teamScore}-${opponentScore} (${result})`;
-  }
-
-  private nameMatch(a: string, b: string): boolean {
-    const normalize = (s: string) => s.toLowerCase().trim();
-    return normalize(a).includes(normalize(b)) || normalize(b).includes(normalize(a));
   }
 }

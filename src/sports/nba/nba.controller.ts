@@ -39,11 +39,10 @@ export class NbaController {
         usage: result.usage,
         estimatedCost: result.estimatedCost,
         match: {
-          homeTeam: result.oddsData.homeTeam,
-          awayTeam: result.oddsData.awayTeam,
-          commenceTime: result.oddsData.commenceTime,
+          homeTeam: result.matchData.homeTeamName,
+          awayTeam: result.matchData.awayTeamName,
+          commenceTime: result.matchData.commenceTime,
         },
-        apiUsage: result.oddsData.apiUsage,
       },
     };
   }

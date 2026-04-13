@@ -4,15 +4,11 @@ import { CacheService } from './cache.service';
 /**
  * ESPNQualitativeService
  *
- * Fuente exclusiva de contexto CUALITATIVO para el modelo de IA.
- * NO maneja estadísticas (eso es Sofascore/RapidAPI) ni cuotas (eso es The Odds API).
- *
- * Qué aporta al modelo:
- *  - Lesiones y estado de jugadores clave
+ * Contexto cualitativo para el modelo de IA:
+ *  - Lesiones y estado de jugadores
  *  - Noticias recientes del equipo
  *  - Forma actual (racha, posición en tabla)
  *  - Contexto del partido (local/visitante, sede, historial H2H)
- *  - Perfil y disponibilidad de atletas
  */
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
@@ -28,8 +24,8 @@ const ESPN_URLS = {
 // ─── SERVICE ───────────────────────────────────────────────────────────────
 
 @Injectable()
-export class ESPNService {
-  private readonly logger = new Logger(ESPNService.name);
+export class ESPNQualitativeService {
+  private readonly logger = new Logger(ESPNQualitativeService.name);
 
   private readonly headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
